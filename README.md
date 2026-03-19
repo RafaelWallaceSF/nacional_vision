@@ -1,22 +1,46 @@
-# Projeto inicial
+# OPS CORE — fase 1
 
-Página estática inicial criada para validar acesso e layout.
+Estrutura inicial para sair de site estático e virar sistema.
 
-## Rodar
+## Stack
+- Frontend: React + Vite + TypeScript
+- Backend: Node.js + Express + TypeScript
 
+## Módulos criados
+- Login
+- Dashboard
+- Menu lateral
+- Relatórios
+- Agendamentos
+- Histórico
+
+## Portas
+- Frontend: `5173`
+- Backend: `4000`
+
+## Rodar localmente
+
+### Frontend
 ```bash
-python3 -m http.server 3000
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-Abrir:
+### Backend
+```bash
+cd backend
+npm install
+npm run dev
+```
 
-- http://74.1.21.111:3000
+## URLs
+- Frontend: `http://74.1.21.111:5173`
+- Backend health: `http://74.1.21.111:4000/api/health`
 
-## Próximo passo
-
-Definir stack:
-- HTML/CSS puro
-- Vite + React
-- Next.js
-- Landing page
-- Dashboard
+## Próxima fase sugerida
+1. Autenticação real (JWT/session)
+2. Banco de dados
+3. CRUD de relatórios/agendamentos
+4. Histórico persistente
+5. Permissões por perfil

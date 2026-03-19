@@ -65,7 +65,7 @@ app.post('/api/auth/login', async (req, res) => {
       ok: true,
       token: 'mock-admin-token',
       user: {
-        id: user.id,
+        id: Number(user.id),
         name: user.name,
         email: user.email,
         role: user.role,
@@ -92,13 +92,99 @@ app.get('/api/users', async (_req, res) => {
   }
 });
 
-app.get('/api/kpis', (_req, res) => {
-  res.json({
-    users: 1284,
-    reports: 87,
-    schedules: 23,
-    historyItems: 416
-  });
+app.post('/api/users', async (req, res) => {
+  const { name, email, password, role, active } = req.body ?? {};
+
+  if (!name || !email || !password) {
+    return res.status(400).json({ message: 'Nome, e-mail e senha são obrigatórios' });
+  }
+
+  try {
+    const existing = await pool.query('SELECT id FROM public.app_users WHERE email = $1 LIMIT 1', [email]);
+    if (existing.rowCount) {
+      return res.status(409).json({ message: 'Já existe usuário com esse e-mail' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      `INSERT INTO public.app_users (name, email, password_hash, role, active)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, email, role, active, created_at, updated_at`,
+      [name, email, passwordHash, role || 'user', active ?? true],
+    );
+
+    return res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Erro ao criar usuário' });
+  }
+});
+
+app.put('/api/users/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, email, role, active, password } = req.body ?? {};
+
+  try {
+    const existing = await pool.query('SELECT id FROM public.app_users WHERE id = $1 LIMIT 1', [id]);
+    if (!existing.rowCount) {
+      return res.status(404).json({ message: 'Usuário não encontrado' });
+    }
+
+    if (password) {
+      const passwordHash = await bcrypt.hash(password, 10);
+      const result = await pool.query(
+        `UPDATE public.app_users
+         SET name = $1, email = $2, role = $3, active = $4, password_hash = $5, updated_at = NOW()
+         WHERE id = $6
+         RETURNING id, name, email, role, active, created_at, updated_at`,
+        [name, email, role, active, passwordHash, id],
+      );
+      return res.json(result.rows[0]);
+    }
+
+    const result = await pool.query(
+      `UPDATE public.app_users
+       SET name = $1, email = $2, role = $3, active = $4, updated_at = NOW()
+       WHERE id = $5
+       RETURNING id, name, email, role, active, created_at, updated_at`,
+      [name, email, role, active, id],
+    );
+
+    return res.json(result.rows[0]);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Erro ao atualizar usuário' });
+  }
+});
+
+app.delete('/api/users/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM public.app_users WHERE id = $1 RETURNING id', [id]);
+    if (!result.rowCount) {
+      return res.status(404).json({ message: 'Usuário não encontrado' });
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Erro ao remover usuário' });
+  }
+});
+
+app.get('/api/kpis', async (_req, res) => {
+  try {
+    const result = await pool.query('SELECT COUNT(*)::int AS total FROM public.app_users WHERE active = TRUE');
+    res.json({
+      users: result.rows[0]?.total ?? 0,
+      reports: 87,
+      schedules: 23,
+      historyItems: 416,
+    });
+  } catch {
+    res.json({ users: 0, reports: 87, schedules: 23, historyItems: 416 });
+  }
 });
 
 app.get('/api/reports', (_req, res) => {

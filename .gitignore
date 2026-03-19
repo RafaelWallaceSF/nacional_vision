@@ -5,3 +5,5 @@ frontend/dist/
 backend/dist/
 .vite/
 *.log
+.env
+backend/.env

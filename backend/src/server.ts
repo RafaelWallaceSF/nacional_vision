@@ -1,54 +1,95 @@
 import express from 'express';
 import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import { initDb } from './initDb';
+import { pool, testDbConnection } from './db';
 
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
 
-const TEST_ADMIN = {
-  id: 1,
-  name: 'Admin Teste',
-  email: 'admin@teste.local',
-  password: 'Admin@123',
-  role: 'admin'
-};
-
 app.use(cors());
 app.use(express.json());
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'backend', timestamp: new Date().toISOString() });
+app.get('/api/health', async (_req, res) => {
+  try {
+    const db = await testDbConnection();
+    res.json({ ok: true, service: 'backend', database: 'connected', timestamp: db.now });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, service: 'backend', database: 'error' });
+  }
 });
 
-app.get('/api/auth/test-user', (_req, res) => {
-  res.json({
-    id: TEST_ADMIN.id,
-    name: TEST_ADMIN.name,
-    email: TEST_ADMIN.email,
-    role: TEST_ADMIN.role,
-    password: TEST_ADMIN.password
-  });
+app.get('/api/auth/test-user', async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, email, role, active, created_at
+       FROM public.app_users
+       WHERE email = $1
+       LIMIT 1`,
+      ['admin@teste.local'],
+    );
+
+    res.json(result.rows[0] ?? null);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao consultar usuário de teste' });
+  }
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body ?? {};
 
-  if (email === TEST_ADMIN.email && password === TEST_ADMIN.password) {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, email, password_hash, role, active
+       FROM public.app_users
+       WHERE email = $1
+       LIMIT 1`,
+      [email],
+    );
+
+    const user = result.rows[0];
+
+    if (!user || !user.active) {
+      return res.status(401).json({ ok: false, message: 'Credenciais inválidas' });
+    }
+
+    const matches = await bcrypt.compare(password, user.password_hash);
+
+    if (!matches) {
+      return res.status(401).json({ ok: false, message: 'Credenciais inválidas' });
+    }
+
     return res.json({
       ok: true,
       token: 'mock-admin-token',
       user: {
-        id: TEST_ADMIN.id,
-        name: TEST_ADMIN.name,
-        email: TEST_ADMIN.email,
-        role: TEST_ADMIN.role
-      }
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
     });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: 'Erro interno no login' });
   }
+});
 
-  return res.status(401).json({
-    ok: false,
-    message: 'Credenciais inválidas'
-  });
+app.get('/api/users', async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, email, role, active, created_at, updated_at
+       FROM public.app_users
+       ORDER BY id ASC`,
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao listar usuários' });
+  }
 });
 
 app.get('/api/kpis', (_req, res) => {
@@ -84,6 +125,17 @@ app.get('/api/history', (_req, res) => {
   ]);
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Backend running on http://0.0.0.0:${PORT}`);
-});
+async function start() {
+  try {
+    await initDb();
+
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Backend running on http://0.0.0.0:${PORT}`);
+    });
+  } catch (error) {
+    console.error('Failed to start backend:', error);
+    process.exit(1);
+  }
+}
+
+start();

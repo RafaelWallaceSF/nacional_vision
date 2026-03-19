@@ -1,4 +1,6 @@
-import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
+import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import './App.css'
 
 type StatCardProps = {
@@ -6,6 +8,15 @@ type StatCardProps = {
   value: string
   delta: string
 }
+
+type User = {
+  id: number
+  name: string
+  email: string
+  role: string
+}
+
+const AUTH_STORAGE_KEY = 'ops-core-auth'
 
 function StatCard({ label, value, delta }: StatCardProps) {
   return (
@@ -17,7 +28,40 @@ function StatCard({ label, value, delta }: StatCardProps) {
   )
 }
 
-function LoginPage() {
+function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
+  const navigate = useNavigate()
+  const [email, setEmail] = useState('admin@teste.local')
+  const [password, setPassword] = useState('Admin@123')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setLoading(true)
+    setError('')
+
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Falha no login')
+      }
+
+      onLogin(data.user)
+      navigate('/dashboard')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha no login')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="auth-shell">
       <div className="auth-panel">
@@ -25,20 +69,27 @@ function LoginPage() {
           <p className="eyebrow">Fase 1</p>
           <h1>Entrar no sistema</h1>
           <p className="muted">
-            Base inicial pronta para autenticação, navegação interna e evolução do produto.
+            Admin de teste liberado para acelerar a construção do sistema.
           </p>
         </div>
 
-        <form className="auth-form">
+        <div className="test-user-box">
+          <strong>Usuário admin de teste</strong>
+          <span>E-mail: admin@teste.local</span>
+          <span>Senha: Admin@123</span>
+        </div>
+
+        <form className="auth-form" onSubmit={handleSubmit}>
           <label>
             E-mail
-            <input type="email" placeholder="admin@empresa.com" />
+            <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="admin@teste.local" />
           </label>
           <label>
             Senha
-            <input type="password" placeholder="••••••••" />
+            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="••••••••" />
           </label>
-          <button type="button">Acessar painel</button>
+          {error ? <p className="error-text">{error}</p> : null}
+          <button type="submit" disabled={loading}>{loading ? 'Entrando...' : 'Acessar painel'}</button>
         </form>
       </div>
     </div>
@@ -154,13 +205,22 @@ function HistoryPage() {
   )
 }
 
-function ShellLayout() {
+function ProtectedRoute({ isAuthenticated, children }: { isAuthenticated: boolean; children: any }) {
+  if (!isAuthenticated) {
+    return <Navigate to="/" replace />
+  }
+
+  return children
+}
+
+function ShellLayout({ user, onLogout }: { user: User | null; onLogout: () => void }) {
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div>
           <p className="brand-mark">⚡ OPS CORE</p>
           <h3>Sistema interno</h3>
+          <p className="sidebar-user">{user?.name}<br />{user?.email}</p>
         </div>
         <nav className="menu">
           <NavLink to="/dashboard">Dashboard</NavLink>
@@ -168,6 +228,7 @@ function ShellLayout() {
           <NavLink to="/agendamentos">Agendamentos</NavLink>
           <NavLink to="/historico">Histórico</NavLink>
         </nav>
+        <button className="ghost-btn sidebar-logout" onClick={onLogout}>Sair</button>
       </aside>
       <main className="main-content">
         <Routes>
@@ -175,6 +236,7 @@ function ShellLayout() {
           <Route path="/relatorios" element={<ReportsPage />} />
           <Route path="/agendamentos" element={<SchedulesPage />} />
           <Route path="/historico" element={<HistoryPage />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>
     </div>
@@ -182,11 +244,39 @@ function ShellLayout() {
 }
 
 function App() {
+  const [user, setUser] = useState<User | null>(null)
+
+  useEffect(() => {
+    const saved = localStorage.getItem(AUTH_STORAGE_KEY)
+    if (saved) {
+      setUser(JSON.parse(saved) as User)
+    }
+  }, [])
+
+  const isAuthenticated = useMemo(() => Boolean(user), [user])
+
+  function handleLogin(nextUser: User) {
+    setUser(nextUser)
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextUser))
+  }
+
+  function handleLogout() {
+    setUser(null)
+    localStorage.removeItem(AUTH_STORAGE_KEY)
+  }
+
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<LoginPage />} />
-        <Route path="/*" element={<ShellLayout />} />
+        <Route path="/" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage onLogin={handleLogin} />} />
+        <Route
+          path="/*"
+          element={
+            <ProtectedRoute isAuthenticated={isAuthenticated}>
+              <ShellLayout user={user} onLogout={handleLogout} />
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </BrowserRouter>
   )

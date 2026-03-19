@@ -66,11 +66,14 @@ th,td { text-align: left; padding: 14px 8px; border-bottom: 1px solid rgba(255,2
 .mini-btn { padding: 10px 12px; border-radius: 10px; }
 .mini-btn.danger { background: linear-gradient(135deg, #ff7b7b, #ff4d6d); color: #fff; }
 .filters-panel { margin-bottom: 18px; }
-.filters-panel input { border-radius: 12px; padding: 12px 14px; border: 1px solid rgba(255,255,255,0.08); background: #0d172a; color: #f5f8fc; }
+.filters-panel input,.filters-panel select,.schedule-panel input,.schedule-panel select { border-radius: 12px; padding: 12px 14px; border: 1px solid rgba(255,255,255,0.08); background: #0d172a; color: #f5f8fc; width: 100%; }
 .small-text { font-size: 13px; }
 .report-stats { margin: 18px 0; }
 .negative { color: #ff8fa3; font-weight: 700; }
 .positive { color: #7ef0b1; font-weight: 700; }
+.filter-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.top-space { margin-top: 14px; }
+.schedule-panel { margin-bottom: 18px; }
 @media (max-width: 1080px) {
   .stats-grid,.cards-row,.content-grid,.users-grid { grid-template-columns: 1fr; }
   .app-shell { grid-template-columns: 1fr; }

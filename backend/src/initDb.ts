@@ -20,6 +20,40 @@ export async function initDb() {
     ON public.app_users (email)
   `)
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.report_groups (
+      id BIGSERIAL PRIMARY KEY,
+      name VARCHAR(160) NOT NULL UNIQUE,
+      group_type VARCHAR(40) NOT NULL,
+      delivery_mode VARCHAR(40) NOT NULL DEFAULT 'individual',
+      description TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.report_group_members (
+      id BIGSERIAL PRIMARY KEY,
+      group_id BIGINT NOT NULL REFERENCES public.report_groups(id) ON DELETE CASCADE,
+      member_type VARCHAR(40) NOT NULL,
+      member_key VARCHAR(190) NOT NULL,
+      member_label VARCHAR(190) NOT NULL,
+      channel VARCHAR(40),
+      destination VARCHAR(190),
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (group_id, member_type, member_key)
+    )
+  `)
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_report_group_members_group_id
+    ON public.report_group_members (group_id)
+  `)
+
   const existing = await pool.query(
     'SELECT id FROM public.app_users WHERE email = $1 LIMIT 1',
     ['admin@teste.local'],

@@ -14,12 +14,8 @@ function toNumber(value: unknown) {
   if (value === null || value === undefined) return 0;
   const raw = String(value).trim();
   if (!raw) return 0;
-  if (raw.includes(',') && raw.includes('.')) {
-    return Number(raw.replace(/\./g, '').replace(',', '.')) || 0;
-  }
-  if (raw.includes(',')) {
-    return Number(raw.replace(',', '.')) || 0;
-  }
+  if (raw.includes(',') && raw.includes('.')) return Number(raw.replace(/\./g, '').replace(',', '.')) || 0;
+  if (raw.includes(',')) return Number(raw.replace(',', '.')) || 0;
   return Number(raw) || 0;
 }
 
@@ -28,9 +24,8 @@ function formatCurrency(value: number) {
 }
 
 function buildMaioresQuedasCaption(report: any) {
-  const alvo = report.filters.vendedor || report.filters.supervisor || 'geral';
   const topItems = report.items.slice(0, report.filters.top || 5);
-  const lines = [
+  return [
     `📉 Maiores Quedas`,
     `Referência: ${report.referenceDate}`,
     `Filtro: ${report.filters.vendedor ? `RCA ${report.filters.vendedor}` : report.filters.supervisor ? `Supervisor ${report.filters.supervisor}` : 'sem filtro'}`,
@@ -41,159 +36,20 @@ function buildMaioresQuedasCaption(report: any) {
     '',
     `Top ${topItems.length}:`,
     ...topItems.map((item: any, index: number) => `${index + 1}. ${item.cliente} — perda ${formatCurrency(toNumber(item.perda_valor))} — ${item.cidade} — ${item.rca} — ${item.perda_percentual}%`),
-  ];
-
-  return lines.join('\n');
+  ].join('\n');
 }
 
 async function getMaioresQuedas(params: { referenceDate: string; top: number; vendedor?: string; supervisor?: string }) {
   const { referenceDate, top, vendedor = '', supervisor = '' } = params;
-
-  const periodsResult = await pool.query(
-    `WITH params AS (
-       SELECT $1::date AS ref_date
-     ),
-     current_period AS (
-       SELECT d::date AS day
-       FROM params, generate_series(date_trunc('month', ref_date)::date, ref_date, interval '1 day') d
-       WHERE EXTRACT(ISODOW FROM d) < 7
-     ),
-     count_days AS (
-       SELECT COUNT(*)::int AS business_days FROM current_period
-     ),
-     previous_period AS (
-       SELECT d::date AS day
-       FROM params, count_days,
-            generate_series((date_trunc('month', ref_date) - interval '1 month')::date,
-                            (date_trunc('month', ref_date) - interval '1 day')::date,
-                            interval '1 day') d
-       WHERE EXTRACT(ISODOW FROM d) < 7
-       ORDER BY d
-       LIMIT (SELECT business_days FROM count_days)
-     )
-     SELECT
-       (SELECT MIN(day) FROM current_period) AS current_start,
-       (SELECT MAX(day) FROM current_period) AS current_end,
-       (SELECT COUNT(*) FROM current_period) AS current_days,
-       (SELECT MIN(day) FROM previous_period) AS previous_start,
-       (SELECT MAX(day) FROM previous_period) AS previous_end,
-       (SELECT COUNT(*) FROM previous_period) AS previous_days`,
-    [referenceDate],
-  );
-
+  const periodsResult = await pool.query(`WITH params AS (SELECT $1::date AS ref_date), current_period AS (SELECT d::date AS day FROM params, generate_series(date_trunc('month', ref_date)::date, ref_date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7), count_days AS (SELECT COUNT(*)::int AS business_days FROM current_period), previous_period AS (SELECT d::date AS day FROM params, count_days, generate_series((date_trunc('month', ref_date) - interval '1 month')::date, (date_trunc('month', ref_date) - interval '1 day')::date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7 ORDER BY d LIMIT (SELECT business_days FROM count_days)) SELECT (SELECT MIN(day) FROM current_period) AS current_start, (SELECT MAX(day) FROM current_period) AS current_end, (SELECT COUNT(*) FROM current_period) AS current_days, (SELECT MIN(day) FROM previous_period) AS previous_start, (SELECT MAX(day) FROM previous_period) AS previous_end, (SELECT COUNT(*) FROM previous_period) AS previous_days`, [referenceDate]);
   const periods = periodsResult.rows[0];
-
-  const reportResult = await pool.query(
-    `WITH pedidos AS (
-       SELECT
-         (raw_data->>'NUMPED') AS numped,
-         (raw_data->>'CODCLI')::bigint AS codcli,
-         MAX(raw_data->>'CLIENTE') AS cliente,
-         MAX(raw_data->>'NOMECIDADE') AS cidade,
-         MAX((raw_data->>'CODUSUR1')::bigint) AS codusur,
-         MAX(TRIM(raw_data->>'VENDEDOR')) AS vendedor,
-         MAX((raw_data->>'SUPERV')::bigint) AS codsuperv,
-         (raw_data->>'DATA')::date AS data_pedido,
-         SUM(REPLACE(raw_data->>'TOTAL', ',', '.')::numeric) AS total_pedido
-       FROM staging."FATO_PEDIDO"
-       WHERE raw_data->>'POSICAO' = 'F'
-         AND (raw_data->>'DATA') IS NOT NULL
-       GROUP BY 1, 2, 8
-     ),
-     clientes AS (
-       SELECT DISTINCT ON ((raw_data->>'COD_CLIENTE')::bigint)
-         (raw_data->>'COD_CLIENTE')::bigint AS cod_cliente,
-         raw_data->>'NOME_CLIENTE' AS nome_cliente,
-         raw_data->>'NOMECIDADE' AS nomecidade,
-         raw_data->>'STATUS_CLIENTE' AS status_cliente,
-         raw_data->>'TELEFONE_1' AS telefone_1,
-         raw_data->>'TELEFONE_2' AS telefone_2,
-         raw_data->>'TELEFONE_COMERCIAL' AS telefone_comercial,
-         (raw_data->>'COD_VEND')::bigint AS cod_vend,
-         (raw_data->>'COD_SUPERV')::bigint AS cod_superv,
-         TRIM(raw_data->>'SUPERVISOR') AS supervisor
-       FROM staging."DIM_CLIENTES"
-     ),
-     funcionarios AS (
-       SELECT DISTINCT ON ((raw_data->>'CODUSUR')::bigint)
-         (raw_data->>'CODUSUR')::bigint AS codusur,
-         TRIM(raw_data->>'NOME') AS nome_funcionario,
-         (raw_data->>'CODSUPERVISOR')::bigint AS codsupervisor,
-         raw_data->>'NOMEGERENTE' AS nomegerente
-       FROM staging."DIM_FUNCIONARIOS"
-     ),
-     consolidado AS (
-       SELECT
-         p.codcli AS cod_cliente,
-         COALESCE(c.nome_cliente, p.cliente) AS cliente,
-         COALESCE(c.nomecidade, p.cidade) AS cidade,
-         COALESCE(f.nome_funcionario, p.vendedor) AS rca,
-         COALESCE(c.supervisor, '') AS supervisor,
-         COALESCE(NULLIF(c.telefone_1, ''), NULLIF(c.telefone_comercial, ''), NULLIF(c.telefone_2, '')) AS telefone,
-         SUM(CASE WHEN p.data_pedido BETWEEN $1::date AND $2::date THEN p.total_pedido ELSE 0 END) AS mes_atual,
-         SUM(CASE WHEN p.data_pedido BETWEEN $3::date AND $4::date THEN p.total_pedido ELSE 0 END) AS mes_passado
-       FROM pedidos p
-       LEFT JOIN clientes c ON c.cod_cliente = p.codcli
-       LEFT JOIN funcionarios f ON f.codusur = p.codusur
-       WHERE COALESCE(c.status_cliente, 'ATIVO') = 'ATIVO'
-         AND ($7 = '' OR COALESCE(f.nome_funcionario, p.vendedor) = $7)
-         AND ($8 = '' OR COALESCE(c.supervisor, '') = $8)
-       GROUP BY 1,2,3,4,5,6
-     )
-     SELECT
-       cod_cliente,
-       cliente,
-       cidade,
-       rca,
-       supervisor,
-       telefone,
-       ROUND(mes_passado, 2) AS mes_passado,
-       ROUND(mes_atual, 2) AS mes_atual,
-       ROUND(mes_atual - mes_passado, 2) AS perda_valor,
-       ROUND(CASE WHEN mes_passado > 0 THEN ((mes_atual - mes_passado) / mes_passado) * 100 ELSE 0 END, 2) AS perda_percentual,
-       ROUND((mes_atual / GREATEST($5::numeric, 1)) * $6::numeric, 2) AS projecao_mes,
-       CASE WHEN mes_atual < mes_passado THEN 'queda' WHEN mes_atual > mes_passado THEN 'alta' ELSE 'estavel' END AS tendencia
-     FROM consolidado
-     WHERE mes_passado > 0
-     ORDER BY perda_valor ASC, mes_passado DESC
-     LIMIT $9`,
-    [
-      periods.current_start,
-      periods.current_end,
-      periods.previous_start,
-      periods.previous_end,
-      periods.current_days,
-      periods.previous_days,
-      vendedor,
-      supervisor,
-      top,
-    ],
-  );
-
-  const report = {
-    referenceDate,
-    periods,
-    filters: { vendedor, supervisor, top },
-    summary: {
-      clientesEmQueda: reportResult.rows.filter((row) => toNumber(row.perda_valor) < 0).length,
-      perdaAcumulada: reportResult.rows.reduce((sum, row) => sum + Math.min(0, toNumber(row.perda_valor)), 0),
-      vendaMesAtual: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_atual), 0),
-      vendaMesPassado: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0),
-    },
-    items: reportResult.rows,
-  };
-
-  return report;
+  const reportResult = await pool.query(`WITH pedidos AS ( SELECT (raw_data->>'NUMPED') AS numped, (raw_data->>'CODCLI')::bigint AS codcli, MAX(raw_data->>'CLIENTE') AS cliente, MAX(raw_data->>'NOMECIDADE') AS cidade, MAX((raw_data->>'CODUSUR1')::bigint) AS codusur, MAX(TRIM(raw_data->>'VENDEDOR')) AS vendedor, MAX((raw_data->>'SUPERV')::bigint) AS codsuperv, (raw_data->>'DATA')::date AS data_pedido, SUM(REPLACE(raw_data->>'TOTAL', ',', '.')::numeric) AS total_pedido FROM staging."FATO_PEDIDO" WHERE raw_data->>'POSICAO' = 'F' AND (raw_data->>'DATA') IS NOT NULL GROUP BY 1,2,8 ), clientes AS ( SELECT DISTINCT ON ((raw_data->>'COD_CLIENTE')::bigint) (raw_data->>'COD_CLIENTE')::bigint AS cod_cliente, raw_data->>'NOME_CLIENTE' AS nome_cliente, raw_data->>'NOMECIDADE' AS nomecidade, raw_data->>'STATUS_CLIENTE' AS status_cliente, raw_data->>'TELEFONE_1' AS telefone_1, raw_data->>'TELEFONE_2' AS telefone_2, raw_data->>'TELEFONE_COMERCIAL' AS telefone_comercial, (raw_data->>'COD_VEND')::bigint AS cod_vend, (raw_data->>'COD_SUPERV')::bigint AS cod_superv, TRIM(raw_data->>'SUPERVISOR') AS supervisor FROM staging."DIM_CLIENTES" ), funcionarios AS ( SELECT DISTINCT ON ((raw_data->>'CODUSUR')::bigint) (raw_data->>'CODUSUR')::bigint AS codusur, TRIM(raw_data->>'NOME') AS nome_funcionario, (raw_data->>'CODSUPERVISOR')::bigint AS codsupervisor, raw_data->>'NOMEGERENTE' AS nomegerente FROM staging."DIM_FUNCIONARIOS" ), consolidado AS ( SELECT p.codcli AS cod_cliente, COALESCE(c.nome_cliente, p.cliente) AS cliente, COALESCE(c.nomecidade, p.cidade) AS cidade, COALESCE(f.nome_funcionario, p.vendedor) AS rca, COALESCE(c.supervisor, '') AS supervisor, COALESCE(NULLIF(c.telefone_1, ''), NULLIF(c.telefone_comercial, ''), NULLIF(c.telefone_2, '')) AS telefone, SUM(CASE WHEN p.data_pedido BETWEEN $1::date AND $2::date THEN p.total_pedido ELSE 0 END) AS mes_atual, SUM(CASE WHEN p.data_pedido BETWEEN $3::date AND $4::date THEN p.total_pedido ELSE 0 END) AS mes_passado FROM pedidos p LEFT JOIN clientes c ON c.cod_cliente = p.codcli LEFT JOIN funcionarios f ON f.codusur = p.codusur WHERE COALESCE(c.status_cliente, 'ATIVO') = 'ATIVO' AND ($7 = '' OR COALESCE(f.nome_funcionario, p.vendedor) = $7) AND ($8 = '' OR COALESCE(c.supervisor, '') = $8) GROUP BY 1,2,3,4,5,6 ) SELECT cod_cliente, cliente, cidade, rca, supervisor, telefone, ROUND(mes_passado, 2) AS mes_passado, ROUND(mes_atual, 2) AS mes_atual, ROUND(mes_atual - mes_passado, 2) AS perda_valor, ROUND(CASE WHEN mes_passado > 0 THEN ((mes_atual - mes_passado) / mes_passado) * 100 ELSE 0 END, 2) AS perda_percentual, ROUND((mes_atual / GREATEST($5::numeric, 1)) * $6::numeric, 2) AS projecao_mes, CASE WHEN mes_atual < mes_passado THEN 'queda' WHEN mes_atual > mes_passado THEN 'alta' ELSE 'estavel' END AS tendencia FROM consolidado WHERE mes_passado > 0 ORDER BY perda_valor ASC, mes_passado DESC LIMIT $9`, [periods.current_start, periods.current_end, periods.previous_start, periods.previous_end, periods.current_days, periods.previous_days, vendedor, supervisor, top]);
+  return { referenceDate, periods, filters: { vendedor, supervisor, top }, summary: { clientesEmQueda: reportResult.rows.filter((row) => toNumber(row.perda_valor) < 0).length, perdaAcumulada: reportResult.rows.reduce((sum, row) => sum + Math.min(0, toNumber(row.perda_valor)), 0), vendaMesAtual: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_atual), 0), vendaMesPassado: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0) }, items: reportResult.rows };
 }
 
 app.get('/api/health', async (_req, res) => {
-  try {
-    const db = await testDbConnection();
-    res.json({ ok: true, service: 'backend', database: 'connected', timestamp: db.now });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ ok: false, service: 'backend', database: 'error' });
-  }
+  try { const db = await testDbConnection(); res.json({ ok: true, service: 'backend', database: 'connected', timestamp: db.now }); }
+  catch (error) { console.error(error); res.status(500).json({ ok: false, service: 'backend', database: 'error' }); }
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -205,66 +61,39 @@ app.post('/api/auth/login', async (req, res) => {
     const matches = await bcrypt.compare(password, user.password_hash);
     if (!matches) return res.status(401).json({ ok: false, message: 'Credenciais inválidas' });
     return res.json({ ok: true, token: 'mock-admin-token', user: { id: Number(user.id), name: user.name, email: user.email, role: user.role } });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ ok: false, message: 'Erro interno no login' });
-  }
+  } catch (error) { console.error(error); return res.status(500).json({ ok: false, message: 'Erro interno no login' }); }
 });
 
-app.get('/api/users', async (_req, res) => {
+app.get('/api/groups', async (_req, res) => {
   try {
-    const result = await pool.query(`SELECT id, name, email, role, active, created_at, updated_at FROM public.app_users ORDER BY id ASC`);
+    const result = await pool.query(`SELECT g.*, COUNT(m.id)::int AS members_count FROM public.report_groups g LEFT JOIN public.report_group_members m ON m.group_id = g.id AND m.active = TRUE GROUP BY g.id ORDER BY g.name ASC`);
     res.json(result.rows);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Erro ao listar usuários' });
-  }
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar grupos' }); }
 });
 
-app.post('/api/users', async (req, res) => {
-  const { name, email, password, role, active } = req.body ?? {};
-  if (!name || !email || !password) return res.status(400).json({ message: 'Nome, e-mail e senha são obrigatórios' });
+app.post('/api/groups', async (req, res) => {
+  const { name, groupType, deliveryMode = 'individual', description = '', active = true } = req.body ?? {};
+  if (!name || !groupType) return res.status(400).json({ message: 'name e groupType são obrigatórios' });
   try {
-    const existing = await pool.query('SELECT id FROM public.app_users WHERE email = $1 LIMIT 1', [email]);
-    if (existing.rowCount) return res.status(409).json({ message: 'Já existe usuário com esse e-mail' });
-    const passwordHash = await bcrypt.hash(password, 10);
-    const result = await pool.query(`INSERT INTO public.app_users (name, email, password_hash, role, active) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, active, created_at, updated_at`, [name, email, passwordHash, role || 'user', active ?? true]);
-    return res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Erro ao criar usuário' });
-  }
+    const result = await pool.query(`INSERT INTO public.report_groups (name, group_type, delivery_mode, description, active) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [name, groupType, deliveryMode, description, active]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar grupo' }); }
 });
 
-app.put('/api/users/:id', async (req, res) => {
-  const { id } = req.params;
-  const { name, email, role, active, password } = req.body ?? {};
+app.get('/api/groups/:id/members', async (req, res) => {
   try {
-    const existing = await pool.query('SELECT id FROM public.app_users WHERE id = $1 LIMIT 1', [id]);
-    if (!existing.rowCount) return res.status(404).json({ message: 'Usuário não encontrado' });
-    if (password) {
-      const passwordHash = await bcrypt.hash(password, 10);
-      const result = await pool.query(`UPDATE public.app_users SET name = $1, email = $2, role = $3, active = $4, password_hash = $5, updated_at = NOW() WHERE id = $6 RETURNING id, name, email, role, active, created_at, updated_at`, [name, email, role, active, passwordHash, id]);
-      return res.json(result.rows[0]);
-    }
-    const result = await pool.query(`UPDATE public.app_users SET name = $1, email = $2, role = $3, active = $4, updated_at = NOW() WHERE id = $5 RETURNING id, name, email, role, active, created_at, updated_at`, [name, email, role, active, id]);
-    return res.json(result.rows[0]);
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Erro ao atualizar usuário' });
-  }
+    const result = await pool.query(`SELECT * FROM public.report_group_members WHERE group_id = $1 ORDER BY member_label ASC`, [req.params.id]);
+    res.json(result.rows);
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar membros do grupo' }); }
 });
 
-app.delete('/api/users/:id', async (req, res) => {
-  const { id } = req.params;
+app.post('/api/groups/:id/members', async (req, res) => {
+  const { memberType, memberKey, memberLabel, channel = null, destination = null, active = true } = req.body ?? {};
+  if (!memberType || !memberKey || !memberLabel) return res.status(400).json({ message: 'memberType, memberKey e memberLabel são obrigatórios' });
   try {
-    const result = await pool.query('DELETE FROM public.app_users WHERE id = $1 RETURNING id', [id]);
-    if (!result.rowCount) return res.status(404).json({ message: 'Usuário não encontrado' });
-    return res.json({ ok: true });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Erro ao remover usuário' });
-  }
+    const result = await pool.query(`INSERT INTO public.report_group_members (group_id, member_type, member_key, member_label, channel, destination, active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [req.params.id, memberType, memberKey, memberLabel, channel, destination, active]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao adicionar membro ao grupo' }); }
 });
 
 app.get('/api/reports/filters', async (_req, res) => {
@@ -274,10 +103,7 @@ app.get('/api/reports/filters', async (_req, res) => {
       pool.query(`SELECT DISTINCT TRIM(raw_data->>'SUPERVISOR') AS value FROM staging."DIM_CLIENTES" WHERE COALESCE(raw_data->>'SUPERVISOR','')<>'' ORDER BY 1`),
     ]);
     res.json({ vendedores: vendedores.rows.map((r) => r.value), supervisores: supervisores.rows.map((r) => r.value) });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Erro ao carregar filtros dos relatórios' });
-  }
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao carregar filtros dos relatórios' }); }
 });
 
 app.get('/api/reports/maiores-quedas', async (req, res) => {
@@ -285,13 +111,8 @@ app.get('/api/reports/maiores-quedas', async (req, res) => {
   const top = Math.min(Number(req.query.top || 30), 200);
   const vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
   const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
-
-  try {
-    res.json(await getMaioresQuedas({ referenceDate, top, vendedor, supervisor }));
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Erro ao gerar relatório de maiores quedas' });
-  }
+  try { res.json(await getMaioresQuedas({ referenceDate, top, vendedor, supervisor })); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao gerar relatório de maiores quedas' }); }
 });
 
 app.get('/api/reports/maiores-quedas/preview', async (req, res) => {
@@ -299,80 +120,44 @@ app.get('/api/reports/maiores-quedas/preview', async (req, res) => {
   const top = Math.min(Number(req.query.top || 5), 20);
   const vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
   const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
-
-  try {
-    const report = await getMaioresQuedas({ referenceDate, top, vendedor, supervisor });
-    const caption = buildMaioresQuedasCaption(report);
-    res.json({ caption, report });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Erro ao gerar preview do envio' });
-  }
+  try { const report = await getMaioresQuedas({ referenceDate, top, vendedor, supervisor }); res.json({ caption: buildMaioresQuedasCaption(report), report }); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao gerar preview do envio' }); }
 });
 
 app.get('/api/schedules', async (_req, res) => {
-  try {
-    const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json FROM public.daily_report_rules ORDER BY id DESC`);
-    res.json(result.rows);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Erro ao listar agendamentos' });
-  }
+  try { const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json FROM public.daily_report_rules ORDER BY id DESC`); res.json(result.rows); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar agendamentos' }); }
 });
 
 app.post('/api/schedules/maiores-quedas', async (req, res) => {
   const { ruleName, targetType, targetId, sendTime, channel, vendedor, supervisor, top = 5 } = req.body ?? {};
   if (!ruleName || !targetType || !targetId || !sendTime) return res.status(400).json({ message: 'ruleName, targetType, targetId e sendTime são obrigatórios' });
   try {
-    const reportTypeCode = 'top_5_quedas';
-    const recipientsJson = [{ kind: 'maiores-quedas', filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 } }];
-    const result = await pool.query(
-      `INSERT INTO public.daily_report_rules
-       (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active)
-       VALUES ($1, $2, $3, $4, $5, 'daily', $6, $7::jsonb, TRUE)
-       RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`,
-      [ruleName, reportTypeCode, targetType, targetId, sendTime, channel || 'whatsapp', JSON.stringify(recipientsJson)],
-    );
+    const result = await pool.query(`INSERT INTO public.daily_report_rules (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active) VALUES ($1, 'top_5_quedas', $2, $3, $4, 'daily', $5, $6::jsonb, TRUE) RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`, [ruleName, targetType, targetId, sendTime, channel || 'whatsapp', JSON.stringify([{ kind: 'maiores-quedas', filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 } }])]);
     res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Erro ao criar agendamento de maiores quedas' });
-  }
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar agendamento de maiores quedas' }); }
 });
 
 app.get('/api/history', async (_req, res) => {
-  try {
-    const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, status, created_at, updated_at, payload_json, result_json, error_message FROM public.daily_report_executions ORDER BY id DESC LIMIT 50`);
-    res.json(result.rows);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Erro ao listar histórico' });
-  }
+  try { const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, status, created_at, updated_at, payload_json, result_json, error_message FROM public.daily_report_executions ORDER BY id DESC LIMIT 50`); res.json(result.rows); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar histórico' }); }
 });
 
 app.get('/api/kpis', async (_req, res) => {
   try {
-    const [users, schedules, history] = await Promise.all([
+    const [users, schedules, history, groups] = await Promise.all([
       pool.query('SELECT COUNT(*)::int AS total FROM public.app_users WHERE active = TRUE'),
       pool.query('SELECT COUNT(*)::int AS total FROM public.daily_report_rules WHERE active = TRUE'),
       pool.query('SELECT COUNT(*)::int AS total FROM public.daily_report_executions'),
+      pool.query('SELECT COUNT(*)::int AS total FROM public.report_groups WHERE active = TRUE'),
     ]);
-    res.json({ users: users.rows[0]?.total ?? 0, reports: 1, schedules: schedules.rows[0]?.total ?? 0, historyItems: history.rows[0]?.total ?? 0 });
-  } catch {
-    res.json({ users: 0, reports: 1, schedules: 0, historyItems: 0 });
-  }
+    res.json({ users: users.rows[0]?.total ?? 0, reports: 1, schedules: schedules.rows[0]?.total ?? 0, historyItems: history.rows[0]?.total ?? 0, groups: groups.rows[0]?.total ?? 0 });
+  } catch { res.json({ users: 0, reports: 1, schedules: 0, historyItems: 0, groups: 0 }); }
 });
 
 async function start() {
-  try {
-    await initDb();
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Backend running on http://0.0.0.0:${PORT}`);
-    });
-  } catch (error) {
-    console.error('Failed to start backend:', error);
-    process.exit(1);
-  }
+  try { await initDb(); app.listen(PORT, '0.0.0.0', () => { console.log(`Backend running on http://0.0.0.0:${PORT}`); }); }
+  catch (error) { console.error('Failed to start backend:', error); process.exit(1); }
 }
 
 start();

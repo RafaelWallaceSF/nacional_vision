@@ -47,6 +47,93 @@ async function getMaioresQuedas(params: { referenceDate: string; top: number; ve
   return { referenceDate, periods, filters: { vendedor, supervisor, top }, summary: { clientesEmQueda: reportResult.rows.filter((row) => toNumber(row.perda_valor) < 0).length, perdaAcumulada: reportResult.rows.reduce((sum, row) => sum + Math.min(0, toNumber(row.perda_valor)), 0), vendaMesAtual: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_atual), 0), vendaMesPassado: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0) }, items: reportResult.rows };
 }
 
+async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) {
+  const ruleResult = await pool.query(`SELECT * FROM public.daily_report_rules WHERE id = $1 LIMIT 1`, [ruleId]);
+  if (!ruleResult.rowCount) throw new Error('Regra não encontrada');
+  const rule = ruleResult.rows[0];
+  const payload = Array.isArray(rule.recipients_json) ? rule.recipients_json[0] || {} : {};
+  const filters = payload.filters || {};
+  const delivery = payload.delivery || {};
+  const effectiveReferenceDate = referenceDate || new Date().toISOString().slice(0, 10);
+  const webhookUrl = delivery.webhookUrl || process.env.DEFAULT_WEBHOOK_URL || null;
+
+  let members: any[] = [];
+  if (rule.target_type === 'group') {
+    const membersResult = await pool.query(`SELECT * FROM public.report_group_members WHERE group_id = $1 AND active = TRUE ORDER BY member_label ASC`, [rule.target_id]);
+    members = membersResult.rows;
+  } else {
+    members = [{ member_type: rule.target_type, member_key: rule.target_id, member_label: rule.target_id, channel: rule.channel, destination: rule.target_id }];
+  }
+
+  const executions = [];
+
+  for (const member of members) {
+    const vendedor = member.member_type === 'vendedor' ? member.member_key : filters.vendedor || '';
+    const supervisor = member.member_type === 'supervisor' ? member.member_key : filters.supervisor || '';
+    const report = await getMaioresQuedas({ referenceDate: effectiveReferenceDate, top: Number(filters.top) || 5, vendedor, supervisor });
+    const message = buildMaioresQuedasCaption(report);
+    const webhookPayload = {
+      campaign: { ruleId: rule.id, ruleName: rule.rule_name, reportCode: rule.report_type_code },
+      member: { type: member.member_type, key: member.member_key, label: member.member_label },
+      delivery: { channel: 'webhook', webhookUrl },
+      report,
+      message,
+    };
+
+    let delivered = false;
+    let statusCode: number | null = null;
+    let webhookError: string | null = null;
+    let responseBody: any = null;
+
+    if (webhookUrl) {
+      try {
+        const response = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(webhookPayload),
+        });
+        statusCode = response.status;
+        delivered = response.ok;
+        const text = await response.text();
+        responseBody = text;
+        if (!response.ok) webhookError = `Webhook HTTP ${response.status}`;
+      } catch (error) {
+        webhookError = error instanceof Error ? error.message : 'Falha ao enviar webhook';
+      }
+    } else {
+      webhookError = 'Webhook não configurado';
+    }
+
+    const executionResult = await pool.query(
+      `INSERT INTO public.daily_report_executions (
+        rule_id, rule_name, report_type_code, target_type, target_id, channel, reference_date,
+        recipients_json, payload_json, webhook_url, webhook_delivered, webhook_status, webhook_error, status
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14)
+      RETURNING id, status, webhook_delivered, webhook_status, webhook_error, created_at`,
+      [
+        rule.id,
+        rule.rule_name,
+        rule.report_type_code,
+        member.member_type,
+        member.member_key,
+        'webhook',
+        effectiveReferenceDate,
+        JSON.stringify([{ member }]),
+        JSON.stringify({ webhookPayload, responseBody }),
+        webhookUrl,
+        delivered,
+        statusCode,
+        webhookError,
+        delivered ? 'delivered' : 'error',
+      ],
+    );
+
+    executions.push({ member: member.member_label, delivered, statusCode, webhookError, execution: executionResult.rows[0] });
+  }
+
+  return { ruleId: rule.id, ruleName: rule.rule_name, membersProcessed: members.length, executions };
+}
+
 app.get('/api/health', async (_req, res) => {
   try { const db = await testDbConnection(); res.json({ ok: true, service: 'backend', database: 'connected', timestamp: db.now }); }
   catch (error) { console.error(error); res.status(500).json({ ok: false, service: 'backend', database: 'error' }); }
@@ -65,35 +152,24 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.get('/api/groups', async (_req, res) => {
-  try {
-    const result = await pool.query(`SELECT g.*, COUNT(m.id)::int AS members_count FROM public.report_groups g LEFT JOIN public.report_group_members m ON m.group_id = g.id AND m.active = TRUE GROUP BY g.id ORDER BY g.name ASC`);
-    res.json(result.rows);
-  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar grupos' }); }
+  try { const result = await pool.query(`SELECT g.*, COUNT(m.id)::int AS members_count FROM public.report_groups g LEFT JOIN public.report_group_members m ON m.group_id = g.id AND m.active = TRUE GROUP BY g.id ORDER BY g.name ASC`); res.json(result.rows); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar grupos' }); }
 });
-
 app.post('/api/groups', async (req, res) => {
   const { name, groupType, deliveryMode = 'individual', description = '', active = true } = req.body ?? {};
   if (!name || !groupType) return res.status(400).json({ message: 'name e groupType são obrigatórios' });
-  try {
-    const result = await pool.query(`INSERT INTO public.report_groups (name, group_type, delivery_mode, description, active) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [name, groupType, deliveryMode, description, active]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar grupo' }); }
+  try { const result = await pool.query(`INSERT INTO public.report_groups (name, group_type, delivery_mode, description, active) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [name, groupType, deliveryMode, description, active]); res.status(201).json(result.rows[0]); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar grupo' }); }
 });
-
 app.get('/api/groups/:id/members', async (req, res) => {
-  try {
-    const result = await pool.query(`SELECT * FROM public.report_group_members WHERE group_id = $1 ORDER BY member_label ASC`, [req.params.id]);
-    res.json(result.rows);
-  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar membros do grupo' }); }
+  try { const result = await pool.query(`SELECT * FROM public.report_group_members WHERE group_id = $1 ORDER BY member_label ASC`, [req.params.id]); res.json(result.rows); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar membros do grupo' }); }
 });
-
 app.post('/api/groups/:id/members', async (req, res) => {
   const { memberType, memberKey, memberLabel, channel = null, destination = null, active = true } = req.body ?? {};
   if (!memberType || !memberKey || !memberLabel) return res.status(400).json({ message: 'memberType, memberKey e memberLabel são obrigatórios' });
-  try {
-    const result = await pool.query(`INSERT INTO public.report_group_members (group_id, member_type, member_key, member_label, channel, destination, active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [req.params.id, memberType, memberKey, memberLabel, channel, destination, active]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao adicionar membro ao grupo' }); }
+  try { const result = await pool.query(`INSERT INTO public.report_group_members (group_id, member_type, member_key, member_label, channel, destination, active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [req.params.id, memberType, memberKey, memberLabel, channel, destination, active]); res.status(201).json(result.rows[0]); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao adicionar membro ao grupo' }); }
 });
 
 app.get('/api/reports/filters', async (_req, res) => {
@@ -105,7 +181,6 @@ app.get('/api/reports/filters', async (_req, res) => {
     res.json({ vendedores: vendedores.rows.map((r) => r.value), supervisores: supervisores.rows.map((r) => r.value) });
   } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao carregar filtros dos relatórios' }); }
 });
-
 app.get('/api/reports/maiores-quedas', async (req, res) => {
   const referenceDate = typeof req.query.referenceDate === 'string' ? req.query.referenceDate : new Date().toISOString().slice(0, 10);
   const top = Math.min(Number(req.query.top || 30), 200);
@@ -114,7 +189,6 @@ app.get('/api/reports/maiores-quedas', async (req, res) => {
   try { res.json(await getMaioresQuedas({ referenceDate, top, vendedor, supervisor })); }
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao gerar relatório de maiores quedas' }); }
 });
-
 app.get('/api/reports/maiores-quedas/preview', async (req, res) => {
   const referenceDate = typeof req.query.referenceDate === 'string' ? req.query.referenceDate : new Date().toISOString().slice(0, 10);
   const top = Math.min(Number(req.query.top || 5), 20);
@@ -128,28 +202,31 @@ app.get('/api/schedules', async (_req, res) => {
   try { const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json FROM public.daily_report_rules ORDER BY id DESC`); res.json(result.rows); }
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar agendamentos' }); }
 });
-
 app.post('/api/schedules/maiores-quedas', async (req, res) => {
   const { ruleName, targetType, targetId, sendTime, channel, webhookUrl, vendedor, supervisor, top = 5 } = req.body ?? {};
   if (!ruleName || !targetType || !targetId || !sendTime) return res.status(400).json({ message: 'ruleName, targetType, targetId e sendTime são obrigatórios' });
   try {
     const finalChannel = channel || 'webhook';
     const finalWebhookUrl = webhookUrl || process.env.DEFAULT_WEBHOOK_URL || null;
-    const recipientsPayload = [{
-      kind: 'maiores-quedas',
-      filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 },
-      delivery: { channel: finalChannel, webhookUrl: finalWebhookUrl }
-    }];
+    const recipientsPayload = [{ kind: 'maiores-quedas', filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 }, delivery: { channel: finalChannel, webhookUrl: finalWebhookUrl } }];
     const result = await pool.query(`INSERT INTO public.daily_report_rules (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active) VALUES ($1, 'top_5_quedas', $2, $3, $4, 'daily', $5, $6::jsonb, TRUE) RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`, [ruleName, targetType, targetId, sendTime, finalChannel, JSON.stringify(recipientsPayload)]);
     res.status(201).json(result.rows[0]);
   } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar agendamento de maiores quedas' }); }
 });
-
-app.get('/api/history', async (_req, res) => {
-  try { const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, status, created_at, updated_at, payload_json, result_json, error_message FROM public.daily_report_executions ORDER BY id DESC LIMIT 50`); res.json(result.rows); }
-  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar histórico' }); }
+app.post('/api/schedules/:id/run', async (req, res) => {
+  try {
+    const result = await executeMaioresQuedasRule(req.params.id, req.body?.referenceDate);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, message: error instanceof Error ? error.message : 'Erro ao executar regra' });
+  }
 });
 
+app.get('/api/history', async (_req, res) => {
+  try { const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, status, created_at, updated_at, payload_json, webhook_url, webhook_delivered, webhook_status, webhook_error FROM public.daily_report_executions ORDER BY id DESC LIMIT 50`); res.json(result.rows); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar histórico' }); }
+});
 app.get('/api/kpis', async (_req, res) => {
   try {
     const [users, schedules, history, groups] = await Promise.all([

@@ -130,10 +130,17 @@ app.get('/api/schedules', async (_req, res) => {
 });
 
 app.post('/api/schedules/maiores-quedas', async (req, res) => {
-  const { ruleName, targetType, targetId, sendTime, channel, vendedor, supervisor, top = 5 } = req.body ?? {};
+  const { ruleName, targetType, targetId, sendTime, channel, webhookUrl, vendedor, supervisor, top = 5 } = req.body ?? {};
   if (!ruleName || !targetType || !targetId || !sendTime) return res.status(400).json({ message: 'ruleName, targetType, targetId e sendTime são obrigatórios' });
   try {
-    const result = await pool.query(`INSERT INTO public.daily_report_rules (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active) VALUES ($1, 'top_5_quedas', $2, $3, $4, 'daily', $5, $6::jsonb, TRUE) RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`, [ruleName, targetType, targetId, sendTime, channel || 'whatsapp', JSON.stringify([{ kind: 'maiores-quedas', filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 } }])]);
+    const finalChannel = channel || 'webhook';
+    const finalWebhookUrl = webhookUrl || process.env.DEFAULT_WEBHOOK_URL || null;
+    const recipientsPayload = [{
+      kind: 'maiores-quedas',
+      filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 },
+      delivery: { channel: finalChannel, webhookUrl: finalWebhookUrl }
+    }];
+    const result = await pool.query(`INSERT INTO public.daily_report_rules (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active) VALUES ($1, 'top_5_quedas', $2, $3, $4, 'daily', $5, $6::jsonb, TRUE) RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`, [ruleName, targetType, targetId, sendTime, finalChannel, JSON.stringify(recipientsPayload)]);
     res.status(201).json(result.rows[0]);
   } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar agendamento de maiores quedas' }); }
 });

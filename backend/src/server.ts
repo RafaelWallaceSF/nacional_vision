@@ -12,7 +12,38 @@ app.use(express.json());
 
 function toNumber(value: unknown) {
   if (value === null || value === undefined) return 0;
-  return Number(String(value).replace(/\./g, '').replace(',', '.')) || 0;
+  const raw = String(value).trim();
+  if (!raw) return 0;
+  if (raw.includes(',') && raw.includes('.')) {
+    return Number(raw.replace(/\./g, '').replace(',', '.')) || 0;
+  }
+  if (raw.includes(',')) {
+    return Number(raw.replace(',', '.')) || 0;
+  }
+  return Number(raw) || 0;
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+}
+
+function buildMaioresQuedasCaption(report: any) {
+  const alvo = report.filters.vendedor || report.filters.supervisor || 'geral';
+  const topItems = report.items.slice(0, report.filters.top || 5);
+  const lines = [
+    `📉 Maiores Quedas`,
+    `Referência: ${report.referenceDate}`,
+    `Filtro: ${report.filters.vendedor ? `RCA ${report.filters.vendedor}` : report.filters.supervisor ? `Supervisor ${report.filters.supervisor}` : 'sem filtro'}`,
+    `Quedas encontradas: ${report.summary.clientesEmQueda}`,
+    `Perda acumulada: ${formatCurrency(report.summary.perdaAcumulada)}`,
+    `Mês atual: ${formatCurrency(report.summary.vendaMesAtual)} | Mês passado: ${formatCurrency(report.summary.vendaMesPassado)}`,
+    `Dias úteis + sábado: ${report.periods.current_days}/${report.periods.previous_days}`,
+    '',
+    `Top ${topItems.length}:`,
+    ...topItems.map((item: any, index: number) => `${index + 1}. ${item.cliente} — perda ${formatCurrency(toNumber(item.perda_valor))} — ${item.cidade} — ${item.rca} — ${item.perda_percentual}%`),
+  ];
+
+  return lines.join('\n');
 }
 
 async function getMaioresQuedas(params: { referenceDate: string; top: number; vendedor?: string; supervisor?: string }) {
@@ -139,7 +170,7 @@ async function getMaioresQuedas(params: { referenceDate: string; top: number; ve
     ],
   );
 
-  return {
+  const report = {
     referenceDate,
     periods,
     filters: { vendedor, supervisor, top },
@@ -151,6 +182,8 @@ async function getMaioresQuedas(params: { referenceDate: string; top: number; ve
     },
     items: reportResult.rows,
   };
+
+  return report;
 }
 
 app.get('/api/health', async (_req, res) => {
@@ -160,16 +193,6 @@ app.get('/api/health', async (_req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ ok: false, service: 'backend', database: 'error' });
-  }
-});
-
-app.get('/api/auth/test-user', async (_req, res) => {
-  try {
-    const result = await pool.query(`SELECT id, name, email, role, active, created_at FROM public.app_users WHERE email = $1 LIMIT 1`, ['admin@teste.local']);
-    res.json(result.rows[0] ?? null);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Erro ao consultar usuário de teste' });
   }
 });
 
@@ -271,9 +294,25 @@ app.get('/api/reports/maiores-quedas', async (req, res) => {
   }
 });
 
+app.get('/api/reports/maiores-quedas/preview', async (req, res) => {
+  const referenceDate = typeof req.query.referenceDate === 'string' ? req.query.referenceDate : new Date().toISOString().slice(0, 10);
+  const top = Math.min(Number(req.query.top || 5), 20);
+  const vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
+  const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
+
+  try {
+    const report = await getMaioresQuedas({ referenceDate, top, vendedor, supervisor });
+    const caption = buildMaioresQuedasCaption(report);
+    res.json({ caption, report });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao gerar preview do envio' });
+  }
+});
+
 app.get('/api/schedules', async (_req, res) => {
   try {
-    const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at FROM public.daily_report_rules ORDER BY id DESC`);
+    const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json FROM public.daily_report_rules ORDER BY id DESC`);
     res.json(result.rows);
   } catch (error) {
     console.error(error);
@@ -285,15 +324,14 @@ app.post('/api/schedules/maiores-quedas', async (req, res) => {
   const { ruleName, targetType, targetId, sendTime, channel, vendedor, supervisor, top = 5 } = req.body ?? {};
   if (!ruleName || !targetType || !targetId || !sendTime) return res.status(400).json({ message: 'ruleName, targetType, targetId e sendTime são obrigatórios' });
   try {
-    const reportTypeCode = top <= 5 ? 'top_5_quedas' : 'top_5_quedas';
-    const recipientsJson = JSON.stringify([]);
-    const payload = { kind: 'maiores-quedas', filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 } };
+    const reportTypeCode = 'top_5_quedas';
+    const recipientsJson = [{ kind: 'maiores-quedas', filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 } }];
     const result = await pool.query(
       `INSERT INTO public.daily_report_rules
        (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active)
        VALUES ($1, $2, $3, $4, $5, 'daily', $6, $7::jsonb, TRUE)
-       RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at`,
-      [ruleName, reportTypeCode, targetType, targetId, sendTime, channel || 'whatsapp', JSON.stringify([{ ...payload }])],
+       RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`,
+      [ruleName, reportTypeCode, targetType, targetId, sendTime, channel || 'whatsapp', JSON.stringify(recipientsJson)],
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -304,7 +342,7 @@ app.post('/api/schedules/maiores-quedas', async (req, res) => {
 
 app.get('/api/history', async (_req, res) => {
   try {
-    const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, status, created_at, updated_at FROM public.daily_report_executions ORDER BY id DESC LIMIT 50`);
+    const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, status, created_at, updated_at, payload_json, result_json, error_message FROM public.daily_report_executions ORDER BY id DESC LIMIT 50`);
     res.json(result.rows);
   } catch (error) {
     console.error(error);
@@ -323,10 +361,6 @@ app.get('/api/kpis', async (_req, res) => {
   } catch {
     res.json({ users: 0, reports: 1, schedules: 0, historyItems: 0 });
   }
-});
-
-app.get('/api/reports', (_req, res) => {
-  res.json([{ id: 1, name: 'Maiores quedas', status: 'Operando com filtros e agendamento', updatedAt: new Date().toISOString() }]);
 });
 
 async function start() {

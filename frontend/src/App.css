@@ -63,6 +63,8 @@ input, select { width: 100%; border: 1px solid #d7e0ea; background: #fff; color:
 .head-badges { display: flex; gap: 10px; flex-wrap: wrap; }
 .soft-badge { display: inline-flex; align-items: center; padding: 8px 12px; border-radius: 999px; background: #f1f5f9; color: #475569; font-size: 12px; font-weight: 700; }
 .soft-badge.active { background: #dcfce7; color: #166534; }
+.webhook-info-row { display: grid; gap: 12px; }
+.webhook-url { display: block; padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; color: #334155; overflow-wrap: anywhere; }
 .toolbar-grid { display: grid; gap: 12px; margin-bottom: 18px; }
 .toolbar-grid.refined { grid-template-columns: 2.2fr 1fr 1fr 170px 120px 130px; }
 .table-wrap { overflow: auto; }
@@ -77,6 +79,7 @@ input, select { width: 100%; border: 1px solid #d7e0ea; background: #fff; color:
 .strong { font-weight: 800; }
 .status-pill { display: inline-flex; align-items: center; justify-content: center; min-width: 94px; padding: 8px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .status-pill.lost { color: #dc2626; background: #fee2e2; border: 1px solid #fecaca; }
+.status-pill.ok { color: #166534; background: #dcfce7; border: 1px solid #86efac; }
 .bottom-grid { display: grid; gap: 20px; }
 .refined-bottom { grid-template-columns: 1.05fr .95fr; }
 .refined-schedule { grid-template-columns: repeat(3, minmax(0, 1fr)); }

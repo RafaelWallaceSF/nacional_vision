@@ -67,6 +67,26 @@ export async function initDb() {
        OR COALESCE(destination, '') = member_label
   `)
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.webhook_test_logs (
+      id BIGSERIAL PRIMARY KEY,
+      employee_name VARCHAR(190) NOT NULL,
+      alias_name VARCHAR(190) NOT NULL,
+      phone VARCHAR(40) NOT NULL,
+      webhook_url TEXT,
+      response_status INTEGER,
+      success BOOLEAN NOT NULL DEFAULT FALSE,
+      response_text TEXT,
+      error_message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_webhook_test_logs_created_at
+    ON public.webhook_test_logs (created_at DESC)
+  `)
+
   await pool.query(`ALTER TABLE public.daily_report_rules DROP CONSTRAINT IF EXISTS chk_daily_report_rules_channel`)
   await pool.query(`ALTER TABLE public.daily_report_rules ADD CONSTRAINT chk_daily_report_rules_channel CHECK (channel::text = ANY (ARRAY['whatsapp','email','telegram','system','webhook']::text[]))`)
   await pool.query(`ALTER TABLE public.daily_report_rules DROP CONSTRAINT IF EXISTS chk_daily_report_rules_target_type`)

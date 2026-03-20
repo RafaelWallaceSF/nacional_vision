@@ -208,6 +208,21 @@ app.delete('/api/groups/:groupId/members/:memberId', async (req, res) => {
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao excluir membro do grupo' }); }
 });
 
+app.get('/api/webhook/info', async (_req, res) => {
+  const webhookUrl = process.env.DEFAULT_WEBHOOK_URL || null;
+  res.json({ configured: Boolean(webhookUrl), webhookUrl });
+});
+
+app.get('/api/webhook/tests', async (_req, res) => {
+  try {
+    const result = await pool.query(`SELECT id, employee_name, alias_name, phone, webhook_url, response_status, success, response_text, error_message, created_at FROM public.webhook_test_logs ORDER BY created_at DESC LIMIT 20`);
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao carregar histórico de testes de webhook' });
+  }
+});
+
 app.post('/api/webhook/test', async (req, res) => {
   const webhookUrl = process.env.DEFAULT_WEBHOOK_URL || null;
   const phone = normalizePhone(req.body?.phone);
@@ -233,10 +248,13 @@ app.post('/api/webhook/test', async (req, res) => {
       body: JSON.stringify(payload),
     });
     const responseText = await response.text();
+    await pool.query(`INSERT INTO public.webhook_test_logs (employee_name, alias_name, phone, webhook_url, response_status, success, response_text, error_message) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [employeeName, aliasName, phone, webhookUrl, response.status, response.ok, responseText, response.ok ? null : `Webhook HTTP ${response.status}`]);
     res.status(response.ok ? 200 : 502).json({ ok: response.ok, status: response.status, webhookUrl, responseText });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ ok: false, message: error instanceof Error ? error.message : 'Falha ao testar webhook' });
+    const errorMessage = error instanceof Error ? error.message : 'Falha ao testar webhook';
+    await pool.query(`INSERT INTO public.webhook_test_logs (employee_name, alias_name, phone, webhook_url, response_status, success, response_text, error_message) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [employeeName, aliasName, phone, webhookUrl, null, false, null, errorMessage]);
+    res.status(500).json({ ok: false, message: errorMessage });
   }
 });
 

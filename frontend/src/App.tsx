@@ -225,16 +225,29 @@ function GroupsPage() {
 
 function SchedulesPage() {
   const [items, setItems] = useState<Schedule[]>([])
+  const [groups, setGroups] = useState<Group[]>([])
   const [runMessage, setRunMessage] = useState('')
   async function load() { const response = await fetch('/api/schedules'); setItems(await response.json()) }
+  async function loadGroups() { const response = await fetch('/api/groups'); setGroups(await response.json()) }
+  function formatTarget(item: Schedule) {
+    if (item.target_type === 'all_vendedores') return 'Todos os vendedores'
+    if (item.target_type === 'group') {
+      const group = groups.find((entry) => String(entry.id) === String(item.target_id))
+      return group ? `Grupo — ${group.name}` : `Grupo — ${item.target_id}`
+    }
+    if (item.target_type === 'vendedor') return `Vendedor — ${item.target_id}`
+    if (item.target_type === 'supervisor') return `Supervisor — ${item.target_id}`
+    if (item.target_type === 'gerente') return `Gerente — ${item.target_id}`
+    return `${item.target_type}: ${item.target_id}`
+  }
   async function runNow(id: number) {
     setRunMessage('')
     const response = await fetch(`/api/schedules/${id}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
     const json = await response.json()
     setRunMessage(response.ok ? `Regra ${id} executada. Membros processados: ${json.membersProcessed}` : (json.message || 'Erro ao executar regra'))
   }
-  useEffect(() => { load().catch(() => undefined) }, [])
-  return <section className="screen-block"><div className="title-area"><h1>Regras de envio</h1><p>Agendamentos ativos do sistema.</p></div>{runMessage ? <div className="panel-shell"><p className="success-text no-margin">{runMessage}</p></div> : null}<div className="panel-shell"><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Regra</th><th>Relatório</th><th>Alvo</th><th>Hora</th><th>Canal</th><th>Ação</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.rule_name}</td><td>{item.report_type_code}</td><td>{item.target_type}: {item.target_id}</td><td>{String(item.send_time).slice(0, 5)}</td><td>{item.channel}</td><td><button className="outline-btn small-btn" onClick={() => runNow(item.id)}>Executar agora</button></td></tr>)}</tbody></table></div></div></section>
+  useEffect(() => { load().catch(() => undefined); loadGroups().catch(() => undefined) }, [])
+  return <section className="screen-block"><div className="title-area"><h1>Regras de envio</h1><p>Agendamentos ativos do sistema.</p></div>{runMessage ? <div className="panel-shell"><p className="success-text no-margin">{runMessage}</p></div> : null}<div className="panel-shell"><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Regra</th><th>Relatório</th><th>Alvo</th><th>Hora</th><th>Canal</th><th>Ação</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.rule_name}</td><td>{item.report_type_code}</td><td>{formatTarget(item)}</td><td>{String(item.send_time).slice(0, 5)}</td><td>{item.channel}</td><td><button className="outline-btn small-btn" onClick={() => runNow(item.id)}>Executar agora</button></td></tr>)}</tbody></table></div></div></section>
 }
 
 function HistoryPage() {

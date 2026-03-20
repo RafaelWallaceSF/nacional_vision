@@ -23,6 +23,14 @@ function formatCurrency(value: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 }
 
+function normalizePhone(value: unknown) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('55')) return digits;
+  if (digits.length >= 10 && digits.length <= 11) return `55${digits}`;
+  return digits;
+}
+
 function buildMaioresQuedasCaption(report: any) {
   const topItems = report.items.slice(0, report.filters.top || 5);
   return [
@@ -174,14 +182,18 @@ app.get('/api/groups/:id/members', async (req, res) => {
 app.post('/api/groups/:id/members', async (req, res) => {
   const { memberType, memberKey, memberLabel, channel = 'webhook', destination = null, active = true } = req.body ?? {};
   if (!memberType || !memberKey || !memberLabel) return res.status(400).json({ message: 'memberType, memberKey e memberLabel são obrigatórios' });
-  try { const result = await pool.query(`INSERT INTO public.report_group_members (group_id, member_type, member_key, member_label, channel, destination, active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [req.params.id, memberType, memberKey, memberLabel, channel, destination, active]); res.status(201).json(result.rows[0]); }
+  const normalizedDestination = normalizePhone(destination);
+  if (!normalizedDestination) return res.status(400).json({ message: 'Telefone é obrigatório' });
+  try { const result = await pool.query(`INSERT INTO public.report_group_members (group_id, member_type, member_key, member_label, channel, destination, active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [req.params.id, memberType, memberKey, memberLabel, channel, normalizedDestination, active]); res.status(201).json(result.rows[0]); }
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao adicionar membro ao grupo' }); }
 });
 app.put('/api/groups/:groupId/members/:memberId', async (req, res) => {
   const { memberType, memberKey, memberLabel, channel = 'webhook', destination = null, active = true } = req.body ?? {};
   if (!memberType || !memberKey || !memberLabel) return res.status(400).json({ message: 'memberType, memberKey e memberLabel são obrigatórios' });
+  const normalizedDestination = normalizePhone(destination);
+  if (!normalizedDestination) return res.status(400).json({ message: 'Telefone é obrigatório' });
   try {
-    const result = await pool.query(`UPDATE public.report_group_members SET member_type = $1, member_key = $2, member_label = $3, channel = $4, destination = $5, active = $6, updated_at = NOW() WHERE id = $7 AND group_id = $8 RETURNING *`, [memberType, memberKey, memberLabel, channel, destination, active, req.params.memberId, req.params.groupId]);
+    const result = await pool.query(`UPDATE public.report_group_members SET member_type = $1, member_key = $2, member_label = $3, channel = $4, destination = $5, active = $6, updated_at = NOW() WHERE id = $7 AND group_id = $8 RETURNING *`, [memberType, memberKey, memberLabel, channel, normalizedDestination, active, req.params.memberId, req.params.groupId]);
     if (!result.rowCount) return res.status(404).json({ message: 'Membro não encontrado' });
     res.json(result.rows[0]);
   }
@@ -194,6 +206,38 @@ app.delete('/api/groups/:groupId/members/:memberId', async (req, res) => {
     res.json({ ok: true });
   }
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao excluir membro do grupo' }); }
+});
+
+app.post('/api/webhook/test', async (req, res) => {
+  const webhookUrl = process.env.DEFAULT_WEBHOOK_URL || null;
+  const phone = normalizePhone(req.body?.phone);
+  const employeeName = String(req.body?.employeeName || 'Teste').trim() || 'Teste';
+  const aliasName = String(req.body?.aliasName || employeeName).trim() || employeeName;
+
+  if (!webhookUrl) return res.status(400).json({ message: 'Webhook padrão não configurado' });
+  if (!phone) return res.status(400).json({ message: 'Telefone é obrigatório para teste' });
+
+  const payload = {
+    test: true,
+    sentAt: new Date().toISOString(),
+    campaign: { ruleId: null, ruleName: 'Teste manual de webhook', reportCode: 'webhook_test' },
+    member: { type: 'teste', key: employeeName, label: aliasName, phone, destination: phone },
+    delivery: { channel: 'webhook', webhookUrl },
+    message: `Teste de webhook para ${aliasName}`,
+  };
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const responseText = await response.text();
+    res.status(response.ok ? 200 : 502).json({ ok: response.ok, status: response.status, webhookUrl, responseText });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, message: error instanceof Error ? error.message : 'Falha ao testar webhook' });
+  }
 });
 
 app.get('/api/employees', async (_req, res) => {

@@ -260,7 +260,18 @@ app.post('/api/webhook/test', async (req, res) => {
 
 app.get('/api/employees', async (_req, res) => {
   try {
-    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'NOME') AS name FROM staging."DIM_FUNCIONARIOS" WHERE COALESCE(TRIM(raw_data->>'NOME'),'') <> '' ORDER BY 1`);
+    const result = await pool.query(`
+      WITH nomes AS (
+        SELECT DISTINCT TRIM(raw_data->>'NOME') AS name
+        FROM staging."DIM_FUNCIONARIOS"
+        WHERE COALESCE(TRIM(raw_data->>'NOME'),'') <> ''
+        UNION
+        SELECT DISTINCT TRIM(raw_data->>'VENDEDOR') AS name
+        FROM staging."FATO_PEDIDO"
+        WHERE COALESCE(TRIM(raw_data->>'VENDEDOR'),'') <> ''
+      )
+      SELECT name FROM nomes ORDER BY 1
+    `);
     res.json(result.rows.map((row) => row.name));
   } catch (error) {
     console.error(error);

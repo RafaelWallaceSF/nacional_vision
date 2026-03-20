@@ -79,6 +79,7 @@ input, select { width: 100%; border: 1px solid #d7e0ea; background: #fff; color:
 .bottom-grid { display: grid; gap: 20px; }
 .refined-bottom { grid-template-columns: 1.05fr .95fr; }
 .refined-schedule { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.group-member-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .message-preview.light { margin: 0; white-space: pre-wrap; color: #334155; line-height: 1.7; font-family: inherit; }
 .refined-preview { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px; min-height: 260px; }
 .preview-shell { align-self: start; }

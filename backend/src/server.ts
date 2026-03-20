@@ -178,6 +178,16 @@ app.post('/api/groups/:id/members', async (req, res) => {
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao adicionar membro ao grupo' }); }
 });
 
+app.get('/api/employees', async (_req, res) => {
+  try {
+    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'NOME') AS name FROM staging."DIM_FUNCIONARIOS" WHERE COALESCE(TRIM(raw_data->>'NOME'),'') <> '' ORDER BY 1`);
+    res.json(result.rows.map((row) => row.name));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao carregar funcionários' });
+  }
+});
+
 app.get('/api/reports/filters', async (_req, res) => {
   try {
     const [vendedores, supervisores] = await Promise.all([

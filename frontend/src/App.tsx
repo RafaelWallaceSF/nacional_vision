@@ -11,7 +11,7 @@ type HistoryItem = { id: number; rule_name: string; report_type_code: string; ta
 type Group = { id: number; name: string; group_type: string; delivery_mode: string; description?: string; active: boolean; members_count: number }
 type GroupMember = { id: number; group_id: number; member_type: string; member_key: string; member_label: string; channel?: string; destination?: string; active: boolean }
 
-type GroupMemberForm = { memberType: string; employeeName: string; phone: string }
+type GroupMemberForm = { memberType: string; employeeName: string; aliasName: string; phone: string }
 
 const AUTH_STORAGE_KEY = 'ops-core-auth'
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -70,7 +70,8 @@ function GroupsPage() {
   const [members, setMembers] = useState<GroupMember[]>([])
   const [message, setMessage] = useState('')
   const [groupForm, setGroupForm] = useState({ name: '', groupType: 'vendedor', deliveryMode: 'individual', description: '' })
-  const [memberForm, setMemberForm] = useState<GroupMemberForm>({ memberType: 'vendedor', employeeName: '', phone: '' })
+  const [memberForm, setMemberForm] = useState<GroupMemberForm>({ memberType: 'vendedor', employeeName: '', aliasName: '', phone: '' })
+  const [employees, setEmployees] = useState<string[]>([])
 
   async function loadGroups() {
     const response = await fetch('/api/groups')
@@ -83,6 +84,11 @@ function GroupsPage() {
     if (!groupId) return setMembers([])
     const response = await fetch(`/api/groups/${groupId}/members`)
     setMembers(await response.json())
+  }
+
+  async function loadEmployees() {
+    const response = await fetch('/api/employees')
+    setEmployees(await response.json())
   }
 
   async function createGroup() {
@@ -103,23 +109,23 @@ function GroupsPage() {
     const payload = {
       memberType: memberForm.memberType,
       memberKey: memberForm.employeeName.trim(),
-      memberLabel: memberForm.employeeName.trim(),
+      memberLabel: memberForm.aliasName.trim() || memberForm.employeeName.trim(),
       channel: 'webhook',
       destination: memberForm.phone.trim(),
     }
     const response = await fetch(`/api/groups/${selectedGroupId}/members`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     const json = await response.json()
     if (!response.ok) return setMessage(json.message || 'Erro ao adicionar membro')
-    setMemberForm({ memberType: 'vendedor', employeeName: '', phone: '' })
+    setMemberForm({ memberType: 'vendedor', employeeName: '', aliasName: '', phone: '' })
     await loadMembers(selectedGroupId)
     await loadGroups()
     setMessage(`Membro adicionado #${json.id}`)
   }
 
-  useEffect(() => { loadGroups().catch(() => undefined) }, [])
+  useEffect(() => { loadGroups().catch(() => undefined); loadEmployees().catch(() => undefined) }, [])
   useEffect(() => { loadMembers(selectedGroupId).catch(() => undefined) }, [selectedGroupId])
 
-  return <section className="screen-block"><div className="hero-row"><div className="title-area"><h1>Grupos operacionais</h1><p>Organize vendedores, supervisores e destinos para campanhas.</p></div></div><div className="bottom-grid refined-bottom"><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Novo grupo</h2><p className="panel-subtitle">Base para campanhas por lote.</p></div></div><div className="toolbar-grid refined-schedule"><input value={groupForm.name} onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })} placeholder="Nome do grupo" /><select value={groupForm.groupType} onChange={(e) => setGroupForm({ ...groupForm, groupType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><select value={groupForm.deliveryMode} onChange={(e) => setGroupForm({ ...groupForm, deliveryMode: e.target.value })}><option value="individual">individual</option><option value="consolidado">consolidado</option></select><input value={groupForm.description} onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })} placeholder="Descrição" /><button className="primary-btn" onClick={createGroup}>Criar grupo</button></div><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Grupo</th><th>Tipo</th><th>Modo</th><th>Membros</th></tr></thead><tbody>{groups.map((group) => <tr key={group.id} className={String(group.id) === selectedGroupId ? 'selected-row' : ''} onClick={() => setSelectedGroupId(String(group.id))}><td>{group.name}</td><td>{group.group_type}</td><td>{group.delivery_mode}</td><td>{group.members_count}</td></tr>)}</tbody></table></div></div><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Membros do grupo</h2><p className="panel-subtitle">Grupo selecionado: {selectedGroupId || 'nenhum'}</p></div></div><div className="toolbar-grid refined-schedule"><select value={memberForm.memberType} onChange={(e) => setMemberForm({ ...memberForm, memberType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><input value={memberForm.employeeName} onChange={(e) => setMemberForm({ ...memberForm, employeeName: e.target.value })} placeholder="Funcionário" /><input value={memberForm.phone} onChange={(e) => setMemberForm({ ...memberForm, phone: e.target.value })} placeholder="Telefone" /><div className="input-like disabled">webhook fixo</div><button className="primary-btn" onClick={addMember}>Adicionar</button></div>{message ? <p className="success-text">{message}</p> : null}<div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Funcionário</th><th>Tipo</th><th>Chave</th><th>Canal</th><th>Telefone</th></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.member_label}</td><td>{member.member_type}</td><td>{member.member_key}</td><td>{member.channel || 'webhook'}</td><td>{member.destination || '-'}</td></tr>)}</tbody></table></div></div></div></section>
+  return <section className="screen-block"><div className="hero-row"><div className="title-area"><h1>Grupos operacionais</h1><p>Organize vendedores, supervisores e destinos para campanhas.</p></div></div><div className="bottom-grid refined-bottom"><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Novo grupo</h2><p className="panel-subtitle">Base para campanhas por lote.</p></div></div><div className="toolbar-grid refined-schedule"><input value={groupForm.name} onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })} placeholder="Nome do grupo" /><select value={groupForm.groupType} onChange={(e) => setGroupForm({ ...groupForm, groupType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><select value={groupForm.deliveryMode} onChange={(e) => setGroupForm({ ...groupForm, deliveryMode: e.target.value })}><option value="individual">individual</option><option value="consolidado">consolidado</option></select><input value={groupForm.description} onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })} placeholder="Descrição" /><button className="primary-btn" onClick={createGroup}>Criar grupo</button></div><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Grupo</th><th>Tipo</th><th>Modo</th><th>Membros</th></tr></thead><tbody>{groups.map((group) => <tr key={group.id} className={String(group.id) === selectedGroupId ? 'selected-row' : ''} onClick={() => setSelectedGroupId(String(group.id))}><td>{group.name}</td><td>{group.group_type}</td><td>{group.delivery_mode}</td><td>{group.members_count}</td></tr>)}</tbody></table></div></div><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Membros do grupo</h2><p className="panel-subtitle">Grupo selecionado: {selectedGroupId || 'nenhum'}</p></div></div><div className="toolbar-grid refined-schedule group-member-grid"><select value={memberForm.memberType} onChange={(e) => setMemberForm({ ...memberForm, memberType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><div><input list="employees-list" value={memberForm.employeeName} onChange={(e) => setMemberForm({ ...memberForm, employeeName: e.target.value })} placeholder="Funcionário da base" /><datalist id="employees-list">{employees.map((employee) => <option key={employee} value={employee} />)}</datalist></div><input value={memberForm.aliasName} onChange={(e) => setMemberForm({ ...memberForm, aliasName: e.target.value })} placeholder="Nome de exibição (opcional)" /><input value={memberForm.phone} onChange={(e) => setMemberForm({ ...memberForm, phone: e.target.value })} placeholder="Telefone" /><div className="input-like disabled">webhook fixo</div><button className="primary-btn" onClick={addMember}>Adicionar</button></div>{message ? <p className="success-text">{message}</p> : null}<div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Nome no grupo</th><th>Funcionário base</th><th>Tipo</th><th>Canal</th><th>Telefone</th></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.member_label}</td><td>{member.member_key}</td><td>{member.member_type}</td><td>{member.channel || 'webhook'}</td><td>{member.destination || '-'}</td></tr>)}</tbody></table></div></div></div></section>
 }
 
 function SchedulesPage() {

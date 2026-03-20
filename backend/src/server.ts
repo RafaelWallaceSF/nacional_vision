@@ -55,6 +55,11 @@ async function getMaioresQuedas(params: { referenceDate: string; top: number; ve
   return { referenceDate, periods, filters: { vendedor, supervisor, top }, summary: { clientesEmQueda: reportResult.rows.filter((row) => toNumber(row.perda_valor) < 0).length, perdaAcumulada: reportResult.rows.reduce((sum, row) => sum + Math.min(0, toNumber(row.perda_valor)), 0), vendaMesAtual: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_atual), 0), vendaMesPassado: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0) }, items: reportResult.rows };
 }
 
+async function getAllVendedores() {
+  const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'VENDEDOR') AS vendedor FROM staging."FATO_PEDIDO" WHERE raw_data->>'POSICAO'='F' AND COALESCE(TRIM(raw_data->>'VENDEDOR'),'')<>'' ORDER BY 1`);
+  return result.rows.map((row) => row.vendedor);
+}
+
 async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) {
   const ruleResult = await pool.query(`SELECT * FROM public.daily_report_rules WHERE id = $1 LIMIT 1`, [ruleId]);
   if (!ruleResult.rowCount) throw new Error('Regra não encontrada');
@@ -69,6 +74,9 @@ async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) 
   if (rule.target_type === 'group') {
     const membersResult = await pool.query(`SELECT * FROM public.report_group_members WHERE group_id = $1 AND active = TRUE ORDER BY member_label ASC`, [rule.target_id]);
     members = membersResult.rows;
+  } else if (rule.target_type === 'all_vendedores') {
+    const vendedores = await getAllVendedores();
+    members = vendedores.map((name) => ({ member_type: 'vendedor', member_key: name, member_label: name, channel: 'webhook', destination: null }));
   } else {
     members = [{ member_type: rule.target_type, member_key: rule.target_id, member_label: rule.target_id, channel: rule.channel, destination: rule.target_id }];
   }
@@ -311,12 +319,14 @@ app.get('/api/schedules', async (_req, res) => {
 });
 app.post('/api/schedules/maiores-quedas', async (req, res) => {
   const { ruleName, targetType, targetId, sendTime, channel, webhookUrl, vendedor, supervisor, top = 5 } = req.body ?? {};
-  if (!ruleName || !targetType || !targetId || !sendTime) return res.status(400).json({ message: 'ruleName, targetType, targetId e sendTime são obrigatórios' });
+  if (!ruleName || !targetType || !sendTime) return res.status(400).json({ message: 'ruleName, targetType e sendTime são obrigatórios' });
+  if (targetType !== 'all_vendedores' && !targetId) return res.status(400).json({ message: 'targetId é obrigatório para este tipo de alvo' });
   try {
     const finalChannel = channel || 'webhook';
     const finalWebhookUrl = webhookUrl || process.env.DEFAULT_WEBHOOK_URL || null;
+    const normalizedTargetId = targetType === 'all_vendedores' ? 'ALL' : targetId;
     const recipientsPayload = [{ kind: 'maiores-quedas', filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 }, delivery: { channel: finalChannel, webhookUrl: finalWebhookUrl } }];
-    const result = await pool.query(`INSERT INTO public.daily_report_rules (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active) VALUES ($1, 'top_5_quedas', $2, $3, $4, 'daily', $5, $6::jsonb, TRUE) RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`, [ruleName, targetType, targetId, sendTime, finalChannel, JSON.stringify(recipientsPayload)]);
+    const result = await pool.query(`INSERT INTO public.daily_report_rules (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active) VALUES ($1, 'top_5_quedas', $2, $3, $4, 'daily', $5, $6::jsonb, TRUE) RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`, [ruleName, targetType, normalizedTargetId, sendTime, finalChannel, JSON.stringify(recipientsPayload)]);
     res.status(201).json(result.rows[0]);
   } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar agendamento de maiores quedas' }); }
 });

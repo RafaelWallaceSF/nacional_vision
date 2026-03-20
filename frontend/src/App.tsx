@@ -7,7 +7,9 @@ type User = { id: number; name: string; email: string; role: string }
 type ReportItem = { cod_cliente: number; cliente: string; cidade: string; rca: string; supervisor: string; telefone: string; mes_passado: number; mes_atual: number; perda_valor: number; perda_percentual: number; projecao_mes: number; tendencia: string }
 type ReportResponse = { referenceDate: string; periods: { current_start: string; current_end: string; current_days: number; previous_start: string; previous_end: string; previous_days: number }; filters: { vendedor: string; supervisor: string; top: number }; summary: { clientesEmQueda: number; perdaAcumulada: number; vendaMesAtual: number; vendaMesPassado: number }; items: ReportItem[] }
 type Schedule = { id: number; rule_name: string; report_type_code: string; target_type: string; target_id: string; send_time: string; frequency: string; channel: string; active: boolean; recipients_json?: any[] }
-type HistoryItem = { id: number; rule_name: string; report_type_code: string; target_type: string; target_id: string; status: string; created_at: string; error_message?: string }
+type HistoryItem = { id: number; rule_name: string; report_type_code: string; target_type: string; target_id: string; status: string; created_at: string; webhook_status?: number; webhook_error?: string | null }
+type Group = { id: number; name: string; group_type: string; delivery_mode: string; description?: string; active: boolean; members_count: number }
+type GroupMember = { id: number; group_id: number; member_type: string; member_key: string; member_label: string; channel?: string; destination?: string; active: boolean }
 
 const AUTH_STORAGE_KEY = 'ops-core-auth'
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -18,34 +20,16 @@ function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
   const [password, setPassword] = useState('Admin@123')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setLoading(true)
-    setError('')
-    try {
-      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.message || 'Falha no login')
-      onLogin(data.user)
-      navigate('/dashboard')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Falha no login')
-    } finally {
-      setLoading(false)
-    }
+    event.preventDefault(); setLoading(true); setError('')
+    try { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.message || 'Falha no login'); onLogin(data.user); navigate('/dashboard') } catch (err) { setError(err instanceof Error ? err.message : 'Falha no login') } finally { setLoading(false) }
   }
-
   return <div className="login-page"><div className="login-card"><p className="section-kicker">PAINEL COMERCIAL</p><h1>Acessar sistema</h1><p className="section-subtitle">Entrar no painel para relatórios, carteira e agendamentos.</p><div className="credential-box"><strong>Admin de teste</strong><span>admin@teste.local</span><span>Admin@123</span></div><form className="form-grid" onSubmit={handleSubmit}><label>E-mail<input value={email} onChange={(e) => setEmail(e.target.value)} type="email" /></label><label>Senha<input value={password} onChange={(e) => setPassword(e.target.value)} type="password" /></label>{error ? <p className="error-text">{error}</p> : null}<button type="submit" className="primary-btn" disabled={loading}>{loading ? 'Entrando...' : 'Entrar'}</button></form></div></div>
 }
 
-function SummaryTile({ label, value, note, tone = 'neutral' }: { label: string; value: string; note: string; tone?: 'neutral' | 'danger' | 'warning' }) {
-  return <div className={`summary-tile ${tone}`}><span>{label}</span><strong>{value}</strong><small>{note}</small></div>
-}
+function SummaryTile({ label, value, note, tone = 'neutral' }: { label: string; value: string; note: string; tone?: 'neutral' | 'danger' | 'warning' }) { return <div className={`summary-tile ${tone}`}><span>{label}</span><strong>{value}</strong><small>{note}</small></div> }
 
-function DashboardPage() {
-  return <section className="screen-block"><div className="hero-row"><div className="title-area"><h1>Inteligência de Carteira</h1><p>Última atualização da base: {new Date().toLocaleDateString('pt-BR')}</p></div><div className="hero-actions"><button className="outline-btn">Dashboard Comercial</button><button className="primary-btn">Nova análise</button></div></div><div className="tab-strip"><button className="tab active">Carteira</button><button className="tab">Estratégicos</button></div><div className="summary-grid"><SummaryTile label="Ativos" value="419" note="clientes ativos" /><SummaryTile label="Atenção" value="298" note="base observada" tone="warning" /><SummaryTile label="Risco" value="219" note="queda relevante" tone="danger" /><SummaryTile label="Perdidos" value="15.680" note="clientes sem reação" tone="danger" /><SummaryTile label="Potencial parado" value="R$ 1,2 mi" note="receita travada" /><SummaryTile label="Limite disponível" value="R$ 0" note="crédito em análise" /></div></section>
-}
+function DashboardPage() { return <section className="screen-block"><div className="hero-row"><div className="title-area"><h1>Inteligência de Carteira</h1><p>Última atualização da base: {new Date().toLocaleDateString('pt-BR')}</p></div><div className="hero-actions"><button className="outline-btn">Dashboard Comercial</button><button className="primary-btn">Nova análise</button></div></div><div className="tab-strip"><button className="tab active">Carteira</button><button className="tab">Estratégicos</button></div><div className="summary-grid"><SummaryTile label="Ativos" value="419" note="clientes ativos" /><SummaryTile label="Atenção" value="298" note="base observada" tone="warning" /><SummaryTile label="Risco" value="219" note="queda relevante" tone="danger" /><SummaryTile label="Perdidos" value="15.680" note="clientes sem reação" tone="danger" /><SummaryTile label="Potencial parado" value="R$ 1,2 mi" note="receita travada" /><SummaryTile label="Limite disponível" value="R$ 0" note="crédito em análise" /></div></section> }
 
 function ReportsPage() {
   const today = new Date().toISOString().slice(0, 10)
@@ -59,183 +43,98 @@ function ReportsPage() {
   const [filters, setFilters] = useState<{ vendedores: string[]; supervisores: string[] }>({ vendedores: [], supervisores: [] })
   const [loading, setLoading] = useState(false)
   const [scheduleMessage, setScheduleMessage] = useState('')
-  const [scheduleForm, setScheduleForm] = useState({ ruleName: 'Maiores quedas diário', targetType: 'vendedor', targetId: '', sendTime: '08:00', channel: 'whatsapp' })
-
+  const [scheduleForm, setScheduleForm] = useState({ ruleName: 'Maiores quedas diário', targetType: 'vendedor', targetId: '', sendTime: '08:00', channel: 'webhook' })
   async function loadReport(date = referenceDate, nextVendedor = vendedor, nextSupervisor = supervisor, nextTop = top) {
     setLoading(true)
     try {
       const query = new URLSearchParams({ referenceDate: date, top: String(nextTop) })
       if (nextVendedor) query.set('vendedor', nextVendedor)
       if (nextSupervisor) query.set('supervisor', nextSupervisor)
-      const [reportResponse, previewResponse] = await Promise.all([
-        fetch(`/api/reports/maiores-quedas?${query.toString()}`),
-        fetch(`/api/reports/maiores-quedas/preview?${query.toString()}`),
-      ])
-      const reportJson = await reportResponse.json()
-      const previewJson = await previewResponse.json()
-      setData(reportJson)
-      setPreview(previewJson.caption || '')
-    } finally {
-      setLoading(false)
-    }
+      const [reportResponse, previewResponse] = await Promise.all([fetch(`/api/reports/maiores-quedas?${query.toString()}`), fetch(`/api/reports/maiores-quedas/preview?${query.toString()}`)])
+      setData(await reportResponse.json())
+      setPreview((await previewResponse.json()).caption || '')
+    } finally { setLoading(false) }
+  }
+  async function loadFilters() { const response = await fetch('/api/reports/filters'); setFilters(await response.json()) }
+  async function createSchedule() { setScheduleMessage(''); const payload = { ...scheduleForm, vendedor, supervisor, top }; const response = await fetch('/api/schedules/maiores-quedas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const json = await response.json(); setScheduleMessage(response.ok ? `Agendamento criado #${json.id}` : (json.message || 'Erro ao criar agendamento')) }
+  useEffect(() => { loadFilters().catch(() => undefined); loadReport(today, '', '', 5).catch(() => undefined) }, [])
+  const filteredItems = (data?.items || []).filter((item) => { const q = search.trim().toLowerCase(); if (!q) return true; return [item.cliente, item.rca, item.supervisor, item.cidade, String(item.cod_cliente)].some((v) => String(v).toLowerCase().includes(q)) })
+  return <section className="screen-block"><div className="hero-row"><div className="title-area"><h1>Inteligência de Carteira</h1><p>Última atualização da base: {new Date(referenceDate).toLocaleDateString('pt-BR')}</p></div><div className="hero-actions"><button className="outline-btn">Exportar PDF</button><button className="primary-btn">Compartilhar ranking</button></div></div><div className="tab-strip"><button className="tab active">Carteira</button><button className="tab">Estratégicos</button></div><div className="summary-grid"><SummaryTile label="Clientes em queda" value={String(data?.summary.clientesEmQueda ?? 0)} note="ranking atual" tone="danger" /><SummaryTile label="Perda acumulada" value={brl.format(data?.summary.perdaAcumulada ?? 0)} note="top retornado" tone="danger" /><SummaryTile label="Mês atual" value={brl.format(data?.summary.vendaMesAtual ?? 0)} note="pedidos posição F" /><SummaryTile label="Mês passado" value={brl.format(data?.summary.vendaMesPassado ?? 0)} note="recorte equivalente" /><SummaryTile label="Top analisado" value={String(top)} note="clientes no ranking" tone="warning" /><SummaryTile label="Filtro" value={vendedor || supervisor || 'Geral'} note="escopo atual" /></div><div className="panel-shell main-panel"><div className="panel-head"><div><h2>Top Oportunidades</h2><p className="panel-subtitle">Leitura operacional dos clientes com maior retração no período equivalente.</p></div><div className="head-badges"><span className="soft-badge">Pasta: Carteira</span><span className="soft-badge active">Atualizado</span></div></div><div className="toolbar-grid refined"><input className="search-input" placeholder="Buscar cliente, RCA, cidade ou código" value={search} onChange={(e) => setSearch(e.target.value)} /><select value={vendedor} onChange={(e) => setVendedor(e.target.value)}><option value="">Todos os RCAs</option>{filters.vendedores.map((item) => <option key={item} value={item}>{item}</option>)}</select><select value={supervisor} onChange={(e) => setSupervisor(e.target.value)}><option value="">Todos os supervisores</option>{filters.supervisores.map((item) => <option key={item} value={item}>{item}</option>)}</select><input type="date" value={referenceDate} onChange={(e) => setReferenceDate(e.target.value)} /><select value={String(top)} onChange={(e) => setTop(Number(e.target.value))}><option value="5">Top 5</option><option value="10">Top 10</option><option value="20">Top 20</option></select><button className="primary-btn" onClick={() => loadReport()}>{loading ? 'Atualizando...' : 'Atualizar'}</button></div><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>RCA</th><th>Cód. Cliente</th><th>Razão Social</th><th>Cidade</th><th>Mês passado</th><th>Mês atual</th><th>Perda</th><th>Queda %</th><th>Status</th></tr></thead><tbody>{filteredItems.map((item) => <tr key={`${item.cod_cliente}-${item.rca}`}><td><div className="cell-title">{item.rca}</div><div className="cell-sub">{item.supervisor}</div></td><td>{item.cod_cliente}</td><td><div className="cell-title">{item.cliente}</div><div className="cell-sub">{item.telefone || '-'}</div></td><td>{item.cidade}</td><td>{brl.format(item.mes_passado)}</td><td>{brl.format(item.mes_atual)}</td><td className="negative strong">{brl.format(item.perda_valor)}</td><td className="negative strong">{item.perda_percentual}%</td><td><span className="status-pill lost">PERDIDO</span></td></tr>)}</tbody></table></div></div><div className="bottom-grid refined-bottom"><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Agendar envio diário</h2><p className="panel-subtitle">Salvar uma regra operacional para disparo recorrente.</p></div></div><div className="toolbar-grid schedule-grid refined-schedule"><input value={scheduleForm.ruleName} onChange={(e) => setScheduleForm({ ...scheduleForm, ruleName: e.target.value })} placeholder="Nome da regra" /><select value={scheduleForm.targetType} onChange={(e) => setScheduleForm({ ...scheduleForm, targetType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="grupo_contato">grupo_contato</option><option value="group">grupo</option></select><input value={scheduleForm.targetId} onChange={(e) => setScheduleForm({ ...scheduleForm, targetId: e.target.value })} placeholder="Alvo ou ID do grupo" /><input type="time" value={scheduleForm.sendTime} onChange={(e) => setScheduleForm({ ...scheduleForm, sendTime: e.target.value })} /><select value={scheduleForm.channel} onChange={(e) => setScheduleForm({ ...scheduleForm, channel: e.target.value })}><option value="webhook">webhook</option><option value="whatsapp">whatsapp</option><option value="email">email</option></select><button className="primary-btn" onClick={createSchedule}>Criar agendamento</button></div>{scheduleMessage ? <p className="success-text">{scheduleMessage}</p> : null}</div><div className="panel-shell preview-shell"><div className="panel-head compact-head"><div><h2>Preview da mensagem</h2><p className="panel-subtitle">Formato que será usado no disparo automático.</p></div></div><pre className="message-preview light refined-preview">{preview || 'Sem preview'}</pre></div></div></section>
+}
+
+function GroupsPage() {
+  const [groups, setGroups] = useState<Group[]>([])
+  const [selectedGroupId, setSelectedGroupId] = useState<string>('')
+  const [members, setMembers] = useState<GroupMember[]>([])
+  const [message, setMessage] = useState('')
+  const [groupForm, setGroupForm] = useState({ name: '', groupType: 'vendedor', deliveryMode: 'individual', description: '' })
+  const [memberForm, setMemberForm] = useState({ memberType: 'vendedor', memberKey: '', memberLabel: '', channel: 'webhook', destination: '' })
+
+  async function loadGroups() {
+    const response = await fetch('/api/groups')
+    const data = await response.json()
+    setGroups(data)
+    if (!selectedGroupId && data[0]) setSelectedGroupId(String(data[0].id))
   }
 
-  async function loadFilters() {
-    const response = await fetch('/api/reports/filters')
-    setFilters(await response.json())
+  async function loadMembers(groupId: string) {
+    if (!groupId) return setMembers([])
+    const response = await fetch(`/api/groups/${groupId}/members`)
+    setMembers(await response.json())
   }
 
-  async function createSchedule() {
-    setScheduleMessage('')
-    const payload = { ...scheduleForm, vendedor, supervisor, top }
-    const response = await fetch('/api/schedules/maiores-quedas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+  async function createGroup() {
+    setMessage('')
+    const response = await fetch('/api/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(groupForm) })
     const json = await response.json()
-    setScheduleMessage(response.ok ? `Agendamento criado #${json.id}` : (json.message || 'Erro ao criar agendamento'))
+    if (!response.ok) return setMessage(json.message || 'Erro ao criar grupo')
+    setGroupForm({ name: '', groupType: 'vendedor', deliveryMode: 'individual', description: '' })
+    setSelectedGroupId(String(json.id))
+    await loadGroups()
+    setMessage(`Grupo criado #${json.id}`)
   }
 
-  useEffect(() => {
-    loadFilters().catch(() => undefined)
-    loadReport(today, '', '', 5).catch(() => undefined)
-  }, [])
+  async function addMember() {
+    if (!selectedGroupId) return setMessage('Selecione um grupo')
+    setMessage('')
+    const response = await fetch(`/api/groups/${selectedGroupId}/members`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(memberForm) })
+    const json = await response.json()
+    if (!response.ok) return setMessage(json.message || 'Erro ao adicionar membro')
+    setMemberForm({ memberType: 'vendedor', memberKey: '', memberLabel: '', channel: 'webhook', destination: '' })
+    await loadMembers(selectedGroupId)
+    await loadGroups()
+    setMessage(`Membro adicionado #${json.id}`)
+  }
 
-  const filteredItems = (data?.items || []).filter((item) => {
-    const q = search.trim().toLowerCase()
-    if (!q) return true
-    return [item.cliente, item.rca, item.supervisor, item.cidade, String(item.cod_cliente)].some((v) => String(v).toLowerCase().includes(q))
-  })
+  useEffect(() => { loadGroups().catch(() => undefined) }, [])
+  useEffect(() => { loadMembers(selectedGroupId).catch(() => undefined) }, [selectedGroupId])
 
-  return (
-    <section className="screen-block">
-      <div className="hero-row">
-        <div className="title-area">
-          <h1>Inteligência de Carteira</h1>
-          <p>Última atualização da base: {new Date(referenceDate).toLocaleDateString('pt-BR')}</p>
-        </div>
-        <div className="hero-actions"><button className="outline-btn">Exportar PDF</button><button className="primary-btn">Compartilhar ranking</button></div>
-      </div>
-
-      <div className="tab-strip"><button className="tab active">Carteira</button><button className="tab">Estratégicos</button></div>
-
-      <div className="summary-grid">
-        <SummaryTile label="Clientes em queda" value={String(data?.summary.clientesEmQueda ?? 0)} note="ranking atual" tone="danger" />
-        <SummaryTile label="Perda acumulada" value={brl.format(data?.summary.perdaAcumulada ?? 0)} note="top retornado" tone="danger" />
-        <SummaryTile label="Mês atual" value={brl.format(data?.summary.vendaMesAtual ?? 0)} note="pedidos posição F" />
-        <SummaryTile label="Mês passado" value={brl.format(data?.summary.vendaMesPassado ?? 0)} note="recorte equivalente" />
-        <SummaryTile label="Top analisado" value={String(top)} note="clientes no ranking" tone="warning" />
-        <SummaryTile label="Filtro" value={vendedor || supervisor || 'Geral'} note="escopo atual" />
-      </div>
-
-      <div className="panel-shell main-panel">
-        <div className="panel-head">
-          <div>
-            <h2>Top Oportunidades</h2>
-            <p className="panel-subtitle">Leitura operacional dos clientes com maior retração no período equivalente.</p>
-          </div>
-          <div className="head-badges"><span className="soft-badge">Pasta: Carteira</span><span className="soft-badge active">Atualizado</span></div>
-        </div>
-
-        <div className="toolbar-grid refined">
-          <input className="search-input" placeholder="Buscar cliente, RCA, cidade ou código" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <select value={vendedor} onChange={(e) => setVendedor(e.target.value)}><option value="">Todos os RCAs</option>{filters.vendedores.map((item) => <option key={item} value={item}>{item}</option>)}</select>
-          <select value={supervisor} onChange={(e) => setSupervisor(e.target.value)}><option value="">Todos os supervisores</option>{filters.supervisores.map((item) => <option key={item} value={item}>{item}</option>)}</select>
-          <input type="date" value={referenceDate} onChange={(e) => setReferenceDate(e.target.value)} />
-          <select value={String(top)} onChange={(e) => setTop(Number(e.target.value))}><option value="5">Top 5</option><option value="10">Top 10</option><option value="20">Top 20</option></select>
-          <button className="primary-btn" onClick={() => loadReport()}>{loading ? 'Atualizando...' : 'Atualizar'}</button>
-        </div>
-
-        <div className="table-wrap refined-wrap">
-          <table className="modern-table refined-table">
-            <thead>
-              <tr>
-                <th>RCA</th>
-                <th>Cód. Cliente</th>
-                <th>Razão Social</th>
-                <th>Cidade</th>
-                <th>Mês passado</th>
-                <th>Mês atual</th>
-                <th>Perda</th>
-                <th>Queda %</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredItems.map((item) => (
-                <tr key={`${item.cod_cliente}-${item.rca}`}>
-                  <td>
-                    <div className="cell-title">{item.rca}</div>
-                    <div className="cell-sub">{item.supervisor}</div>
-                  </td>
-                  <td>{item.cod_cliente}</td>
-                  <td>
-                    <div className="cell-title">{item.cliente}</div>
-                    <div className="cell-sub">{item.telefone || '-'}</div>
-                  </td>
-                  <td>{item.cidade}</td>
-                  <td>{brl.format(item.mes_passado)}</td>
-                  <td>{brl.format(item.mes_atual)}</td>
-                  <td className="negative strong">{brl.format(item.perda_valor)}</td>
-                  <td className="negative strong">{item.perda_percentual}%</td>
-                  <td><span className="status-pill lost">PERDIDO</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="bottom-grid refined-bottom">
-        <div className="panel-shell">
-          <div className="panel-head compact-head"><div><h2>Agendar envio diário</h2><p className="panel-subtitle">Salvar uma regra operacional para disparo recorrente.</p></div></div>
-          <div className="toolbar-grid schedule-grid refined-schedule">
-            <input value={scheduleForm.ruleName} onChange={(e) => setScheduleForm({ ...scheduleForm, ruleName: e.target.value })} placeholder="Nome da regra" />
-            <select value={scheduleForm.targetType} onChange={(e) => setScheduleForm({ ...scheduleForm, targetType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="grupo_contato">grupo_contato</option></select>
-            <input value={scheduleForm.targetId} onChange={(e) => setScheduleForm({ ...scheduleForm, targetId: e.target.value })} placeholder="Alvo" />
-            <input type="time" value={scheduleForm.sendTime} onChange={(e) => setScheduleForm({ ...scheduleForm, sendTime: e.target.value })} />
-            <select value={scheduleForm.channel} onChange={(e) => setScheduleForm({ ...scheduleForm, channel: e.target.value })}><option value="whatsapp">whatsapp</option><option value="email">email</option></select>
-            <button className="primary-btn" onClick={createSchedule}>Criar agendamento</button>
-          </div>
-          {scheduleMessage ? <p className="success-text">{scheduleMessage}</p> : null}
-        </div>
-
-        <div className="panel-shell preview-shell">
-          <div className="panel-head compact-head"><div><h2>Preview da mensagem</h2><p className="panel-subtitle">Formato que será usado no disparo automático.</p></div></div>
-          <pre className="message-preview light refined-preview">{preview || 'Sem preview'}</pre>
-        </div>
-      </div>
-    </section>
-  )
+  return <section className="screen-block"><div className="hero-row"><div className="title-area"><h1>Grupos operacionais</h1><p>Organize vendedores, supervisores e destinos para campanhas.</p></div></div><div className="bottom-grid refined-bottom"><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Novo grupo</h2><p className="panel-subtitle">Base para campanhas por lote.</p></div></div><div className="toolbar-grid refined-schedule"><input value={groupForm.name} onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })} placeholder="Nome do grupo" /><select value={groupForm.groupType} onChange={(e) => setGroupForm({ ...groupForm, groupType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><select value={groupForm.deliveryMode} onChange={(e) => setGroupForm({ ...groupForm, deliveryMode: e.target.value })}><option value="individual">individual</option><option value="consolidado">consolidado</option></select><input value={groupForm.description} onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })} placeholder="Descrição" /><button className="primary-btn" onClick={createGroup}>Criar grupo</button></div><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Grupo</th><th>Tipo</th><th>Modo</th><th>Membros</th></tr></thead><tbody>{groups.map((group) => <tr key={group.id} className={String(group.id) === selectedGroupId ? 'selected-row' : ''} onClick={() => setSelectedGroupId(String(group.id))}><td>{group.name}</td><td>{group.group_type}</td><td>{group.delivery_mode}</td><td>{group.members_count}</td></tr>)}</tbody></table></div></div><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Membros do grupo</h2><p className="panel-subtitle">Grupo selecionado: {selectedGroupId || 'nenhum'}</p></div></div><div className="toolbar-grid refined-schedule"><select value={memberForm.memberType} onChange={(e) => setMemberForm({ ...memberForm, memberType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><input value={memberForm.memberKey} onChange={(e) => setMemberForm({ ...memberForm, memberKey: e.target.value })} placeholder="Chave do membro" /><input value={memberForm.memberLabel} onChange={(e) => setMemberForm({ ...memberForm, memberLabel: e.target.value })} placeholder="Nome amigável" /><select value={memberForm.channel} onChange={(e) => setMemberForm({ ...memberForm, channel: e.target.value })}><option value="webhook">webhook</option><option value="whatsapp">whatsapp</option><option value="email">email</option></select><input value={memberForm.destination} onChange={(e) => setMemberForm({ ...memberForm, destination: e.target.value })} placeholder="Destino (opcional)" /><button className="primary-btn" onClick={addMember}>Adicionar</button></div>{message ? <p className="success-text">{message}</p> : null}<div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Nome</th><th>Tipo</th><th>Chave</th><th>Canal</th><th>Destino</th></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.member_label}</td><td>{member.member_type}</td><td>{member.member_key}</td><td>{member.channel || '-'}</td><td>{member.destination || '-'}</td></tr>)}</tbody></table></div></div></div></section>
 }
 
 function SchedulesPage() {
   const [items, setItems] = useState<Schedule[]>([])
-  useEffect(() => { fetch('/api/schedules').then((r) => r.json()).then(setItems).catch(() => undefined) }, [])
-  return <section className="screen-block"><div className="title-area"><h1>Regras de envio</h1><p>Agendamentos ativos do sistema.</p></div><div className="panel-shell"><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Regra</th><th>Relatório</th><th>Alvo</th><th>Hora</th><th>Canal</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.rule_name}</td><td>{item.report_type_code}</td><td>{item.target_type}: {item.target_id}</td><td>{String(item.send_time).slice(0, 5)}</td><td>{item.channel}</td></tr>)}</tbody></table></div></div></section>
+  const [runMessage, setRunMessage] = useState('')
+  async function load() { const response = await fetch('/api/schedules'); setItems(await response.json()) }
+  async function runNow(id: number) {
+    setRunMessage('')
+    const response = await fetch(`/api/schedules/${id}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+    const json = await response.json()
+    setRunMessage(response.ok ? `Regra ${id} executada. Membros processados: ${json.membersProcessed}` : (json.message || 'Erro ao executar regra'))
+  }
+  useEffect(() => { load().catch(() => undefined) }, [])
+  return <section className="screen-block"><div className="title-area"><h1>Regras de envio</h1><p>Agendamentos ativos do sistema.</p></div>{runMessage ? <div className="panel-shell"><p className="success-text no-margin">{runMessage}</p></div> : null}<div className="panel-shell"><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Regra</th><th>Relatório</th><th>Alvo</th><th>Hora</th><th>Canal</th><th>Ação</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.rule_name}</td><td>{item.report_type_code}</td><td>{item.target_type}: {item.target_id}</td><td>{String(item.send_time).slice(0, 5)}</td><td>{item.channel}</td><td><button className="outline-btn small-btn" onClick={() => runNow(item.id)}>Executar agora</button></td></tr>)}</tbody></table></div></div></section>
 }
 
 function HistoryPage() {
   const [items, setItems] = useState<HistoryItem[]>([])
   useEffect(() => { fetch('/api/history').then((r) => r.json()).then(setItems).catch(() => undefined) }, [])
-  return <section className="screen-block"><div className="title-area"><h1>Histórico</h1><p>Execuções e auditoria.</p></div><div className="panel-shell"><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>ID</th><th>Regra</th><th>Alvo</th><th>Status</th><th>Erro</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.id}</td><td>{item.rule_name}</td><td>{item.target_type}: {item.target_id}</td><td>{item.status}</td><td>{item.error_message || '-'}</td></tr>)}</tbody></table></div></div></section>
+  return <section className="screen-block"><div className="title-area"><h1>Histórico</h1><p>Execuções e auditoria.</p></div><div className="panel-shell"><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>ID</th><th>Regra</th><th>Alvo</th><th>Status</th><th>Webhook</th><th>Erro</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.id}</td><td>{item.rule_name}</td><td>{item.target_type}: {item.target_id}</td><td>{item.status}</td><td>{item.webhook_status || '-'}</td><td>{item.webhook_error || '-'}</td></tr>)}</tbody></table></div></div></section>
 }
 
-function UsersPage() {
-  return <section className="screen-block"><div className="title-area"><h1>Usuários</h1><p>Módulo mantido para evolução posterior.</p></div><div className="panel-shell"><p className="plain-text">CRUD de usuários segue disponível na API e voltamos aqui quando quiser refinar permissões.</p></div></section>
-}
-
-function TopNav({ user, onLogout }: { user: User | null; onLogout: () => void }) {
-  return <header className="top-nav"><div className="brand-area"><strong>Painel RW</strong><nav><NavLink to="/dashboard">Home</NavLink><NavLink to="/relatorios">Carteira</NavLink><NavLink to="/usuarios">RCA</NavLink><NavLink to="/agendamentos">Regras</NavLink><NavLink to="/historico">Importar CSV</NavLink></nav></div><div className="user-area"><span>{user?.email}</span><button className="icon-btn" onClick={onLogout}>↪</button></div></header>
-}
-
+function UsersPage() { return <section className="screen-block"><div className="title-area"><h1>Usuários</h1><p>Módulo mantido para evolução posterior.</p></div><div className="panel-shell"><p className="plain-text">CRUD de usuários segue disponível na API e voltamos aqui quando quiser refinar permissões.</p></div></section> }
+function TopNav({ user, onLogout }: { user: User | null; onLogout: () => void }) { return <header className="top-nav"><div className="brand-area"><strong>Painel RW</strong><nav><NavLink to="/dashboard">Home</NavLink><NavLink to="/relatorios">Carteira</NavLink><NavLink to="/grupos">Grupos</NavLink><NavLink to="/agendamentos">Regras</NavLink><NavLink to="/historico">Histórico</NavLink><NavLink to="/usuarios">Usuários</NavLink></nav></div><div className="user-area"><span>{user?.email}</span><button className="icon-btn" onClick={onLogout}>↪</button></div></header> }
 function ProtectedRoute({ isAuthenticated, children }: { isAuthenticated: boolean; children: any }) { return !isAuthenticated ? <Navigate to="/" replace /> : children }
-function ShellLayout({ user, onLogout }: { user: User | null; onLogout: () => void }) { return <div className="light-shell"><TopNav user={user} onLogout={onLogout} /><main className="page-container"><Routes><Route path="/dashboard" element={<DashboardPage />} /><Route path="/relatorios" element={<ReportsPage />} /><Route path="/agendamentos" element={<SchedulesPage />} /><Route path="/historico" element={<HistoryPage />} /><Route path="/usuarios" element={<UsersPage />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></main></div> }
-
-function App() {
-  const [user, setUser] = useState<User | null>(null)
-  useEffect(() => { const saved = localStorage.getItem(AUTH_STORAGE_KEY); if (saved) setUser(JSON.parse(saved) as User) }, [])
-  const isAuthenticated = useMemo(() => Boolean(user), [user])
-  function handleLogin(nextUser: User) { setUser(nextUser); localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextUser)) }
-  function handleLogout() { setUser(null); localStorage.removeItem(AUTH_STORAGE_KEY) }
-  return <BrowserRouter><Routes><Route path="/" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage onLogin={handleLogin} />} /><Route path="/*" element={<ProtectedRoute isAuthenticated={isAuthenticated}><ShellLayout user={user} onLogout={handleLogout} /></ProtectedRoute>} /></Routes></BrowserRouter>
-}
-
+function ShellLayout({ user, onLogout }: { user: User | null; onLogout: () => void }) { return <div className="light-shell"><TopNav user={user} onLogout={onLogout} /><main className="page-container"><Routes><Route path="/dashboard" element={<DashboardPage />} /><Route path="/relatorios" element={<ReportsPage />} /><Route path="/grupos" element={<GroupsPage />} /><Route path="/agendamentos" element={<SchedulesPage />} /><Route path="/historico" element={<HistoryPage />} /><Route path="/usuarios" element={<UsersPage />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></main></div> }
+function App() { const [user, setUser] = useState<User | null>(null); useEffect(() => { const saved = localStorage.getItem(AUTH_STORAGE_KEY); if (saved) setUser(JSON.parse(saved) as User) }, []); const isAuthenticated = useMemo(() => Boolean(user), [user]); function handleLogin(nextUser: User) { setUser(nextUser); localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextUser)) } function handleLogout() { setUser(null); localStorage.removeItem(AUTH_STORAGE_KEY) } return <BrowserRouter><Routes><Route path="/" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage onLogin={handleLogin} />} /><Route path="/*" element={<ProtectedRoute isAuthenticated={isAuthenticated}><ShellLayout user={user} onLogout={handleLogout} /></ProtectedRoute>} /></Routes></BrowserRouter> }
 export default App

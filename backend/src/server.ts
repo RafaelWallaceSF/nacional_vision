@@ -266,6 +266,46 @@ app.post('/api/webhook/test', async (req, res) => {
   }
 });
 
+app.get('/api/funcionarios', async (_req, res) => {
+  try {
+    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'NOME') AS name FROM staging."DIM_FUNCIONARIOS" WHERE COALESCE(TRIM(raw_data->>'NOME'),'') <> '' ORDER BY 1`);
+    res.json(result.rows.map((row) => row.name));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao carregar funcionários' });
+  }
+});
+
+app.get('/api/vendedores', async (_req, res) => {
+  try {
+    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'VENDEDOR') AS name FROM staging."FATO_PEDIDO" WHERE COALESCE(TRIM(raw_data->>'VENDEDOR'),'') <> '' ORDER BY 1`);
+    res.json(result.rows.map((row) => row.name));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao carregar vendedores' });
+  }
+});
+
+app.get('/api/supervisores', async (_req, res) => {
+  try {
+    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'SUPERVISOR') AS name FROM staging."DIM_CLIENTES" WHERE COALESCE(TRIM(raw_data->>'SUPERVISOR'),'') <> '' ORDER BY 1`);
+    res.json(result.rows.map((row) => row.name));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao carregar supervisores' });
+  }
+});
+
+app.get('/api/gerentes', async (_req, res) => {
+  try {
+    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'NOMEGERENTE') AS name FROM staging."DIM_FUNCIONARIOS" WHERE COALESCE(TRIM(raw_data->>'NOMEGERENTE'),'') <> '' ORDER BY 1`);
+    res.json(result.rows.map((row) => row.name));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao carregar gerentes' });
+  }
+});
+
 app.get('/api/employees', async (_req, res) => {
   try {
     const result = await pool.query(`

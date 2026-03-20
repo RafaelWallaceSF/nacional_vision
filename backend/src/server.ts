@@ -74,7 +74,13 @@ async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) 
     const message = buildMaioresQuedasCaption(report);
     const webhookPayload = {
       campaign: { ruleId: rule.id, ruleName: rule.rule_name, reportCode: rule.report_type_code },
-      member: { type: member.member_type, key: member.member_key, label: member.member_label },
+      member: {
+        type: member.member_type,
+        key: member.member_key,
+        label: member.member_label,
+        phone: member.destination || null,
+        destination: member.destination || null,
+      },
       delivery: { channel: 'webhook', webhookUrl },
       report,
       message,

@@ -54,6 +54,19 @@ export async function initDb() {
     ON public.report_group_members (group_id)
   `)
 
+  await pool.query(`
+    UPDATE public.report_group_members
+    SET channel = 'webhook',
+        destination = CASE
+          WHEN COALESCE(destination, '') = '' OR destination = member_key OR destination = member_label THEN NULL
+          ELSE destination
+        END,
+        updated_at = NOW()
+    WHERE COALESCE(channel, '') <> 'webhook'
+       OR COALESCE(destination, '') = member_key
+       OR COALESCE(destination, '') = member_label
+  `)
+
   await pool.query(`ALTER TABLE public.daily_report_rules DROP CONSTRAINT IF EXISTS chk_daily_report_rules_channel`)
   await pool.query(`ALTER TABLE public.daily_report_rules ADD CONSTRAINT chk_daily_report_rules_channel CHECK (channel::text = ANY (ARRAY['whatsapp','email','telegram','system','webhook']::text[]))`)
   await pool.query(`ALTER TABLE public.daily_report_rules DROP CONSTRAINT IF EXISTS chk_daily_report_rules_target_type`)

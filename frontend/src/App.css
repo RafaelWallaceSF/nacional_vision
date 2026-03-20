@@ -26,6 +26,7 @@ input, select { width: 100%; border: 1px solid #d7e0ea; background: #fff; color:
 .primary-btn, .outline-btn, .icon-btn, .tab { border-radius: 14px; border: 1px solid transparent; }
 .primary-btn { background: #111827; color: #fff; padding: 13px 18px; }
 .outline-btn { background: #fff; color: #0f172a; border-color: #d7e0ea; padding: 12px 18px; }
+.danger-btn { color: #b91c1c; border-color: #fecaca; background: #fff5f5; }
 .icon-btn { background: #fff; border-color: #d7e0ea; width: 42px; height: 42px; }
 .error-text { margin: 0; color: #dc2626; }
 .success-text { margin-top: 16px; color: #16a34a; }
@@ -80,6 +81,9 @@ input, select { width: 100%; border: 1px solid #d7e0ea; background: #fff; color:
 .refined-bottom { grid-template-columns: 1.05fr .95fr; }
 .refined-schedule { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .group-member-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.member-actions, .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.small-btn { padding: 8px 12px; border-radius: 10px; }
+.no-margin { margin: 0; }
 .message-preview.light { margin: 0; white-space: pre-wrap; color: #334155; line-height: 1.7; font-family: inherit; }
 .refined-preview { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px; min-height: 260px; }
 .preview-shell { align-self: start; }

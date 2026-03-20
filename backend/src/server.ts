@@ -172,10 +172,28 @@ app.get('/api/groups/:id/members', async (req, res) => {
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar membros do grupo' }); }
 });
 app.post('/api/groups/:id/members', async (req, res) => {
-  const { memberType, memberKey, memberLabel, channel = null, destination = null, active = true } = req.body ?? {};
+  const { memberType, memberKey, memberLabel, channel = 'webhook', destination = null, active = true } = req.body ?? {};
   if (!memberType || !memberKey || !memberLabel) return res.status(400).json({ message: 'memberType, memberKey e memberLabel são obrigatórios' });
   try { const result = await pool.query(`INSERT INTO public.report_group_members (group_id, member_type, member_key, member_label, channel, destination, active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [req.params.id, memberType, memberKey, memberLabel, channel, destination, active]); res.status(201).json(result.rows[0]); }
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao adicionar membro ao grupo' }); }
+});
+app.put('/api/groups/:groupId/members/:memberId', async (req, res) => {
+  const { memberType, memberKey, memberLabel, channel = 'webhook', destination = null, active = true } = req.body ?? {};
+  if (!memberType || !memberKey || !memberLabel) return res.status(400).json({ message: 'memberType, memberKey e memberLabel são obrigatórios' });
+  try {
+    const result = await pool.query(`UPDATE public.report_group_members SET member_type = $1, member_key = $2, member_label = $3, channel = $4, destination = $5, active = $6, updated_at = NOW() WHERE id = $7 AND group_id = $8 RETURNING *`, [memberType, memberKey, memberLabel, channel, destination, active, req.params.memberId, req.params.groupId]);
+    if (!result.rowCount) return res.status(404).json({ message: 'Membro não encontrado' });
+    res.json(result.rows[0]);
+  }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao atualizar membro do grupo' }); }
+});
+app.delete('/api/groups/:groupId/members/:memberId', async (req, res) => {
+  try {
+    const result = await pool.query(`DELETE FROM public.report_group_members WHERE id = $1 AND group_id = $2 RETURNING id`, [req.params.memberId, req.params.groupId]);
+    if (!result.rowCount) return res.status(404).json({ message: 'Membro não encontrado' });
+    res.json({ ok: true });
+  }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao excluir membro do grupo' }); }
 });
 
 app.get('/api/employees', async (_req, res) => {

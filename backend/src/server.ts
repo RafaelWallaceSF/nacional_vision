@@ -278,7 +278,7 @@ app.get('/api/funcionarios', async (_req, res) => {
 
 app.get('/api/vendedores', async (_req, res) => {
   try {
-    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'VENDEDOR') AS name FROM staging."FATO_PEDIDO" WHERE COALESCE(TRIM(raw_data->>'VENDEDOR'),'') <> '' ORDER BY 1`);
+    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'NOME') AS name FROM staging."DIM_CLIENTES" WHERE COALESCE(TRIM(raw_data->>'COD_VEND'),'') <> '' AND COALESCE(TRIM(raw_data->>'NOME'),'') <> '' ORDER BY 1`);
     res.json(result.rows.map((row) => row.name));
   } catch (error) {
     console.error(error);
@@ -288,7 +288,7 @@ app.get('/api/vendedores', async (_req, res) => {
 
 app.get('/api/supervisores', async (_req, res) => {
   try {
-    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'NOME') AS name FROM staging."DIM_FUNCIONARIOS" WHERE COALESCE(TRIM(raw_data->>'NOME'),'') <> '' ORDER BY 1`);
+    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'SUPERVISOR') AS name FROM staging."DIM_CLIENTES" WHERE COALESCE(TRIM(raw_data->>'COD_SUPERV'),'') <> '' AND COALESCE(TRIM(raw_data->>'SUPERVISOR'),'') <> '' ORDER BY 1`);
     res.json(result.rows.map((row) => row.name));
   } catch (error) {
     console.error(error);
@@ -298,8 +298,7 @@ app.get('/api/supervisores', async (_req, res) => {
 
 app.get('/api/gerentes', async (_req, res) => {
   try {
-    const result = await pool.query(`SELECT DISTINCT TRIM(raw_data->>'NOMEGERENTE') AS name FROM staging."DIM_FUNCIONARIOS" WHERE COALESCE(TRIM(raw_data->>'NOMEGERENTE'),'') <> '' ORDER BY 1`);
-    res.json(result.rows.map((row) => row.name));
+    res.json(['JUNIOR']);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Erro ao carregar gerentes' });
@@ -330,8 +329,8 @@ app.get('/api/employees', async (_req, res) => {
 app.get('/api/reports/filters', async (_req, res) => {
   try {
     const [vendedores, supervisores] = await Promise.all([
-      pool.query(`SELECT DISTINCT TRIM(raw_data->>'VENDEDOR') AS value FROM staging."FATO_PEDIDO" WHERE raw_data->>'POSICAO'='F' AND COALESCE(raw_data->>'VENDEDOR','')<>'' ORDER BY 1`),
-      pool.query(`SELECT DISTINCT TRIM(raw_data->>'SUPERVISOR') AS value FROM staging."DIM_CLIENTES" WHERE COALESCE(raw_data->>'SUPERVISOR','')<>'' ORDER BY 1`),
+      pool.query(`SELECT DISTINCT TRIM(raw_data->>'NOME') AS value FROM staging."DIM_CLIENTES" WHERE COALESCE(TRIM(raw_data->>'COD_VEND'),'') <> '' AND COALESCE(TRIM(raw_data->>'NOME'),'') <> '' ORDER BY 1`),
+      pool.query(`SELECT DISTINCT TRIM(raw_data->>'SUPERVISOR') AS value FROM staging."DIM_CLIENTES" WHERE COALESCE(TRIM(raw_data->>'COD_SUPERV'),'') <> '' AND COALESCE(TRIM(raw_data->>'SUPERVISOR'),'') <> '' ORDER BY 1`),
     ]);
     res.json({ vendedores: vendedores.rows.map((r) => r.value), supervisores: supervisores.rows.map((r) => r.value) });
   } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao carregar filtros dos relatórios' }); }

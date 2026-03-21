@@ -58,8 +58,8 @@ const peopleSourceMeta: PeopleSourceMeta = {
   },
   supervisores: {
     label: 'Supervisores',
-    source: 'staging."DIM_CLIENTES"',
-    description: 'Usa somente o campo raw_data->>\'SUPERVISOR\'.',
+    source: 'staging."DIM_FUNCIONARIOS"',
+    description: 'Usa a seleção a partir do campo raw_data->>\'NOME\'.',
   },
   gerentes: {
     label: 'Gerentes',

@@ -6,6 +6,7 @@ import { pool, testDbConnection } from './db';
 
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://74.1.21.111:${PORT}`;
 
 app.use(cors());
 app.use(express.json());
@@ -157,26 +158,30 @@ async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) 
     const supervisor = member.member_type === 'supervisor' ? member.member_key : filters.supervisor || '';
     const report = await getMaioresQuedas({ referenceDate: effectiveReferenceDate, top: Number(filters.top) || 5, vendedor, supervisor });
     const message = buildMaioresQuedasCaption(report);
-    const pdfBuffer = createSimplePdfBuffer(report);
     const pdfFileName = `maiores-quedas-${effectiveReferenceDate}-${String(member.member_label || member.member_key || 'destino').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'destino'}.pdf`;
+    const pdfUrlParams = new URLSearchParams({ referenceDate: effectiveReferenceDate, top: String(Number(filters.top) || 5) });
+    if (vendedor) pdfUrlParams.set('vendedor', vendedor);
+    if (supervisor) pdfUrlParams.set('supervisor', supervisor);
+    const publicPdfUrl = `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf?${pdfUrlParams.toString()}`;
     const webhookPayload = {
-      campaign: { ruleId: rule.id, ruleName: rule.rule_name, reportCode: rule.report_type_code },
-      member: {
-        type: member.member_type,
-        key: member.member_key,
-        label: member.member_label,
-        phone: member.destination || null,
-        destination: member.destination || null,
-      },
-      delivery: { channel: 'webhook', webhookUrl },
-      report,
+      contactName: member.member_label,
+      contactPhone: member.destination || null,
+      reportName: 'Maiores Quedas',
+      reportFileName: pdfFileName,
+      reportPdfUrl: publicPdfUrl,
       message,
-      attachment: {
-        kind: 'pdf',
-        fileName: pdfFileName,
-        mimeType: 'application/pdf',
-        size: pdfBuffer.length,
-        base64: pdfBuffer.toString('base64'),
+      meta: {
+        campaign: { ruleId: rule.id, ruleName: rule.rule_name, reportCode: rule.report_type_code },
+        member: {
+          type: member.member_type,
+          key: member.member_key,
+          label: member.member_label,
+          phone: member.destination || null,
+          destination: member.destination || null,
+        },
+        delivery: { channel: 'webhook', webhookUrl },
+        filters: report.filters,
+        referenceDate: report.referenceDate,
       },
     };
 

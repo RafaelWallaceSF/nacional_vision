@@ -162,7 +162,7 @@ async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) 
     const pdfUrlParams = new URLSearchParams({ referenceDate: effectiveReferenceDate, top: String(Number(filters.top) || 5) });
     if (vendedor) pdfUrlParams.set('vendedor', vendedor);
     if (supervisor) pdfUrlParams.set('supervisor', supervisor);
-    const publicPdfUrl = `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf?${pdfUrlParams.toString()}`;
+    const publicPdfUrl = `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf/${pdfFileName}?${pdfUrlParams.toString()}`;
     const webhookPayload = {
       contactName: member.member_label,
       contactPhone: member.destination || null,
@@ -448,7 +448,7 @@ app.get('/api/reports/maiores-quedas/preview', async (req, res) => {
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao gerar preview do envio' }); }
 });
 
-app.get('/api/reports/maiores-quedas/pdf', async (req, res) => {
+async function sendMaioresQuedasPdf(req: express.Request, res: express.Response) {
   const referenceDate = typeof req.query.referenceDate === 'string' ? req.query.referenceDate : new Date().toISOString().slice(0, 10);
   const top = Math.min(Number(req.query.top || 5), 20);
   const vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
@@ -463,7 +463,10 @@ app.get('/api/reports/maiores-quedas/pdf', async (req, res) => {
     console.error(error);
     res.status(500).json({ message: 'Erro ao gerar PDF do relatório' });
   }
-});
+}
+
+app.get('/api/reports/maiores-quedas/pdf', sendMaioresQuedasPdf);
+app.get('/api/reports/maiores-quedas/pdf/:fileName.pdf', sendMaioresQuedasPdf);
 
 app.get('/api/schedules', async (_req, res) => {
   try { const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json FROM public.daily_report_rules ORDER BY id DESC`); res.json(result.rows); }

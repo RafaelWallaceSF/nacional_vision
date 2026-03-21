@@ -47,6 +47,75 @@ function buildMaioresQuedasCaption(report: any) {
   ].join('\n');
 }
 
+function escapePdfText(value: string) {
+  return value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}
+
+function buildPdfTextLines(report: any) {
+  const lines = [
+    'RELATORIO - MAIORES QUEDAS',
+    `Referencia: ${report.referenceDate}`,
+    `Filtro: ${report.filters.vendedor ? `RCA ${report.filters.vendedor}` : report.filters.supervisor ? `Supervisor ${report.filters.supervisor}` : 'sem filtro'}`,
+    `Clientes em queda: ${report.summary.clientesEmQueda}`,
+    `Perda acumulada: ${formatCurrency(report.summary.perdaAcumulada)}`,
+    `Mes atual: ${formatCurrency(report.summary.vendaMesAtual)}`,
+    `Mes passado: ${formatCurrency(report.summary.vendaMesPassado)}`,
+    '',
+    'TOP CLIENTES:',
+    ...report.items.slice(0, report.filters.top || 5).flatMap((item: any, index: number) => ([
+      `${index + 1}. ${String(item.cliente || '').slice(0, 70)}`,
+      `   RCA: ${item.rca || '-'} | Cidade: ${item.cidade || '-'} | Cliente: ${item.cod_cliente || '-'}`,
+      `   Mes passado: ${formatCurrency(toNumber(item.mes_passado))} | Mes atual: ${formatCurrency(toNumber(item.mes_atual))}`,
+      `   Perda: ${formatCurrency(toNumber(item.perda_valor))} | Queda: ${item.perda_percentual}%`,
+      '',
+    ])),
+  ];
+  return lines;
+}
+
+function createSimplePdfBuffer(report: any) {
+  const lines = buildPdfTextLines(report);
+  const fontSize = 11;
+  const leading = 15;
+  const startY = 800;
+  const textOps = [
+    'BT',
+    '/F1 11 Tf',
+    `1 0 0 1 48 ${startY} Tm`,
+  ];
+
+  lines.forEach((line, index) => {
+    const safe = escapePdfText(line);
+    if (index === 0) textOps.push(`(${safe}) Tj`);
+    else textOps.push(`0 -${leading} Td (${safe}) Tj`);
+  });
+  textOps.push('ET');
+
+  const contentStream = textOps.join('\n');
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj',
+    '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj',
+    `5 0 obj\n<< /Length ${Buffer.byteLength(contentStream, 'utf8')} >>\nstream\n${contentStream}\nendstream\nendobj`,
+  ];
+
+  let pdf = '%PDF-1.4\n';
+  const offsets: number[] = [0];
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(pdf, 'utf8'));
+    pdf += `${object}\n`;
+  }
+  const xrefOffset = Buffer.byteLength(pdf, 'utf8');
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += '0000000000 65535 f \n';
+  for (let i = 1; i <= objects.length; i += 1) {
+    pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return Buffer.from(pdf, 'utf8');
+}
+
 async function getMaioresQuedas(params: { referenceDate: string; top: number; vendedor?: string; supervisor?: string }) {
   const { referenceDate, top, vendedor = '', supervisor = '' } = params;
   const periodsResult = await pool.query(`WITH params AS (SELECT $1::date AS ref_date), current_period AS (SELECT d::date AS day FROM params, generate_series(date_trunc('month', ref_date)::date, ref_date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7), count_days AS (SELECT COUNT(*)::int AS business_days FROM current_period), previous_period AS (SELECT d::date AS day FROM params, count_days, generate_series((date_trunc('month', ref_date) - interval '1 month')::date, (date_trunc('month', ref_date) - interval '1 day')::date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7 ORDER BY d LIMIT (SELECT business_days FROM count_days)) SELECT (SELECT MIN(day) FROM current_period) AS current_start, (SELECT MAX(day) FROM current_period) AS current_end, (SELECT COUNT(*) FROM current_period) AS current_days, (SELECT MIN(day) FROM previous_period) AS previous_start, (SELECT MAX(day) FROM previous_period) AS previous_end, (SELECT COUNT(*) FROM previous_period) AS previous_days`, [referenceDate]);
@@ -88,6 +157,8 @@ async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) 
     const supervisor = member.member_type === 'supervisor' ? member.member_key : filters.supervisor || '';
     const report = await getMaioresQuedas({ referenceDate: effectiveReferenceDate, top: Number(filters.top) || 5, vendedor, supervisor });
     const message = buildMaioresQuedasCaption(report);
+    const pdfBuffer = createSimplePdfBuffer(report);
+    const pdfFileName = `maiores-quedas-${effectiveReferenceDate}-${String(member.member_label || member.member_key || 'destino').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'destino'}.pdf`;
     const webhookPayload = {
       campaign: { ruleId: rule.id, ruleName: rule.rule_name, reportCode: rule.report_type_code },
       member: {
@@ -100,6 +171,13 @@ async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) 
       delivery: { channel: 'webhook', webhookUrl },
       report,
       message,
+      attachment: {
+        kind: 'pdf',
+        fileName: pdfFileName,
+        mimeType: 'application/pdf',
+        size: pdfBuffer.length,
+        base64: pdfBuffer.toString('base64'),
+      },
     };
 
     let delivered = false;
@@ -348,8 +426,38 @@ app.get('/api/reports/maiores-quedas/preview', async (req, res) => {
   const top = Math.min(Number(req.query.top || 5), 20);
   const vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
   const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
-  try { const report = await getMaioresQuedas({ referenceDate, top, vendedor, supervisor }); res.json({ caption: buildMaioresQuedasCaption(report), report }); }
+  try {
+    const report = await getMaioresQuedas({ referenceDate, top, vendedor, supervisor });
+    const pdfBuffer = createSimplePdfBuffer(report);
+    res.json({
+      caption: buildMaioresQuedasCaption(report),
+      report,
+      attachment: {
+        kind: 'pdf',
+        fileName: `maiores-quedas-${referenceDate}.pdf`,
+        mimeType: 'application/pdf',
+        size: pdfBuffer.length,
+      },
+    });
+  }
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao gerar preview do envio' }); }
+});
+
+app.get('/api/reports/maiores-quedas/pdf', async (req, res) => {
+  const referenceDate = typeof req.query.referenceDate === 'string' ? req.query.referenceDate : new Date().toISOString().slice(0, 10);
+  const top = Math.min(Number(req.query.top || 5), 20);
+  const vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
+  const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
+  try {
+    const report = await getMaioresQuedas({ referenceDate, top, vendedor, supervisor });
+    const pdfBuffer = createSimplePdfBuffer(report);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="maiores-quedas-${referenceDate}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao gerar PDF do relatório' });
+  }
 });
 
 app.get('/api/schedules', async (_req, res) => {

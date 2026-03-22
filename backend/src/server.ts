@@ -158,11 +158,12 @@ async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) 
     const supervisor = member.member_type === 'supervisor' ? member.member_key : filters.supervisor || '';
     const report = await getMaioresQuedas({ referenceDate: effectiveReferenceDate, top: Number(filters.top) || 5, vendedor, supervisor });
     const message = buildMaioresQuedasCaption(report);
-    const pdfFileName = `maiores-quedas-${effectiveReferenceDate}-${String(member.member_label || member.member_key || 'destino').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'destino'}.pdf`;
+    const pdfBaseName = `maiores-quedas-${effectiveReferenceDate}-${String(member.member_label || member.member_key || 'destino').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'destino'}`;
+    const pdfFileName = `${pdfBaseName}.pdf`;
     const pdfUrlParams = new URLSearchParams({ referenceDate: effectiveReferenceDate, top: String(Number(filters.top) || 5) });
     if (vendedor) pdfUrlParams.set('vendedor', vendedor);
     if (supervisor) pdfUrlParams.set('supervisor', supervisor);
-    const publicPdfUrl = `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf/${pdfFileName}?${pdfUrlParams.toString()}`;
+    const publicPdfUrl = `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf/${pdfBaseName}.pdf?${pdfUrlParams.toString()}`;
     const webhookPayload = {
       contactName: member.member_label,
       contactPhone: member.destination || null,

@@ -190,13 +190,26 @@ async function getAllVendedores() {
   return result.rows.map((row) => row.vendedor);
 }
 
-async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) {
+function getReportCatalog() {
+  return [
+    { code: 'top_5_quedas', name: 'Maiores quedas', description: 'Clientes com retração / perda no período comparado.', implemented: true, defaults: { top: 5 } },
+    { code: 'sem_compras', name: 'Sem compras', description: 'Clientes sem compra no recorte selecionado.', implemented: false, defaults: { top: 20 } },
+    { code: 'top_oportunidades', name: 'Top oportunidades', description: 'Ranking comercial priorizado para ação.', implemented: false, defaults: { top: 10 } },
+    { code: 'top_10_maiores', name: '10 maiores', description: 'Maiores clientes / contas do período.', implemented: false, defaults: { top: 10 } },
+  ];
+}
+
+async function executeCampaignRule(ruleId: string, referenceDate?: string) {
   const ruleResult = await pool.query(`SELECT * FROM public.daily_report_rules WHERE id = $1 LIMIT 1`, [ruleId]);
   if (!ruleResult.rowCount) throw new Error('Regra não encontrada');
   const rule = ruleResult.rows[0];
   const payload = Array.isArray(rule.recipients_json) ? rule.recipients_json[0] || {} : {};
   const filters = payload.filters || {};
   const delivery = payload.delivery || {};
+  const reportCatalog = getReportCatalog();
+  const reportMeta = reportCatalog.find((item) => item.code === rule.report_type_code);
+  if (!reportMeta) throw new Error(`Tipo de relatório inválido: ${rule.report_type_code}`);
+  if (!reportMeta.implemented) throw new Error(`Relatório ainda não implementado: ${reportMeta.name}`);
   const effectiveReferenceDate = referenceDate || new Date().toISOString().slice(0, 10);
   const webhookUrl = delivery.webhookUrl || process.env.DEFAULT_WEBHOOK_URL || null;
 
@@ -227,7 +240,7 @@ async function executeMaioresQuedasRule(ruleId: string, referenceDate?: string) 
     const webhookPayload = {
       contactName: member.member_label,
       contactPhone: member.destination || null,
-      reportName: 'Maiores Quedas',
+      reportName: reportMeta.name,
       reportFileName: pdfFileName,
       reportPdfUrl: publicPdfUrl,
       message,
@@ -529,26 +542,48 @@ async function sendMaioresQuedasPdf(req: express.Request, res: express.Response)
 app.get('/api/reports/maiores-quedas/pdf', sendMaioresQuedasPdf);
 app.get('/api/reports/maiores-quedas/pdf/:fileName.pdf', sendMaioresQuedasPdf);
 
+app.get('/api/report-types', async (_req, res) => {
+  res.json(getReportCatalog());
+});
+
 app.get('/api/schedules', async (_req, res) => {
   try { const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json FROM public.daily_report_rules ORDER BY id DESC`); res.json(result.rows); }
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar agendamentos' }); }
 });
-app.post('/api/schedules/maiores-quedas', async (req, res) => {
-  const { ruleName, targetType, targetId, sendTime, channel, webhookUrl, vendedor, supervisor, top = 5 } = req.body ?? {};
+app.post('/api/schedules', async (req, res) => {
+  const { ruleName, reportTypeCode = 'top_5_quedas', targetType, targetId, sendTime, channel, webhookUrl, vendedor, supervisor, top } = req.body ?? {};
   if (!ruleName || !targetType || !sendTime) return res.status(400).json({ message: 'ruleName, targetType e sendTime são obrigatórios' });
   if (targetType !== 'all_vendedores' && !targetId) return res.status(400).json({ message: 'targetId é obrigatório para este tipo de alvo' });
+  const reportMeta = getReportCatalog().find((item) => item.code === reportTypeCode);
+  if (!reportMeta) return res.status(400).json({ message: 'reportTypeCode inválido' });
   try {
     const finalChannel = channel || 'webhook';
     const finalWebhookUrl = webhookUrl || process.env.DEFAULT_WEBHOOK_URL || null;
     const normalizedTargetId = targetType === 'all_vendedores' ? 'ALL' : targetId;
-    const recipientsPayload = [{ kind: 'maiores-quedas', filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || 5 }, delivery: { channel: finalChannel, webhookUrl: finalWebhookUrl } }];
-    const result = await pool.query(`INSERT INTO public.daily_report_rules (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active) VALUES ($1, 'top_5_quedas', $2, $3, $4, 'daily', $5, $6::jsonb, TRUE) RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`, [ruleName, targetType, normalizedTargetId, sendTime, finalChannel, JSON.stringify(recipientsPayload)]);
+    const recipientsPayload = [{ kind: reportTypeCode, filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || reportMeta.defaults.top || 5 }, delivery: { channel: finalChannel, webhookUrl: finalWebhookUrl } }];
+    const result = await pool.query(`INSERT INTO public.daily_report_rules (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active) VALUES ($1, $2, $3, $4, $5, 'daily', $6, $7::jsonb, TRUE) RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`, [ruleName, reportTypeCode, targetType, normalizedTargetId, sendTime, finalChannel, JSON.stringify(recipientsPayload)]);
     res.status(201).json(result.rows[0]);
-  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar agendamento de maiores quedas' }); }
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar campanha' }); }
+});
+app.post('/api/schedules/maiores-quedas', async (req, res) => {
+  const nextReqBody = { ...req.body, reportTypeCode: 'top_5_quedas' };
+  const { ruleName, reportTypeCode = 'top_5_quedas', targetType, targetId, sendTime, channel, webhookUrl, vendedor, supervisor, top } = nextReqBody ?? {};
+  if (!ruleName || !targetType || !sendTime) return res.status(400).json({ message: 'ruleName, targetType e sendTime são obrigatórios' });
+  if (targetType !== 'all_vendedores' && !targetId) return res.status(400).json({ message: 'targetId é obrigatório para este tipo de alvo' });
+  const reportMeta = getReportCatalog().find((item) => item.code === reportTypeCode);
+  if (!reportMeta) return res.status(400).json({ message: 'reportTypeCode inválido' });
+  try {
+    const finalChannel = channel || 'webhook';
+    const finalWebhookUrl = webhookUrl || process.env.DEFAULT_WEBHOOK_URL || null;
+    const normalizedTargetId = targetType === 'all_vendedores' ? 'ALL' : targetId;
+    const recipientsPayload = [{ kind: reportTypeCode, filters: { vendedor: vendedor || '', supervisor: supervisor || '', top: Number(top) || reportMeta.defaults.top || 5 }, delivery: { channel: finalChannel, webhookUrl: finalWebhookUrl } }];
+    const result = await pool.query(`INSERT INTO public.daily_report_rules (rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, recipients_json, active) VALUES ($1, $2, $3, $4, $5, 'daily', $6, $7::jsonb, TRUE) RETURNING id, rule_name, report_type_code, target_type, target_id, send_time, frequency, channel, active, created_at, updated_at, recipients_json`, [ruleName, reportTypeCode, targetType, normalizedTargetId, sendTime, finalChannel, JSON.stringify(recipientsPayload)]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar campanha' }); }
 });
 app.post('/api/schedules/:id/run', async (req, res) => {
   try {
-    const result = await executeMaioresQuedasRule(req.params.id, req.body?.referenceDate);
+    const result = await executeCampaignRule(req.params.id, req.body?.referenceDate);
     res.json({ ok: true, ...result });
   } catch (error) {
     console.error(error);

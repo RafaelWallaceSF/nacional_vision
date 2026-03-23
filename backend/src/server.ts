@@ -52,53 +52,113 @@ function escapePdfText(value: string) {
   return value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 }
 
-function buildPdfTextLines(report: any) {
-  const lines = [
-    'RELATORIO - MAIORES QUEDAS',
-    `Referencia: ${report.referenceDate}`,
-    `Filtro: ${report.filters.vendedor ? `RCA ${report.filters.vendedor}` : report.filters.supervisor ? `Supervisor ${report.filters.supervisor}` : 'sem filtro'}`,
-    `Clientes em queda: ${report.summary.clientesEmQueda}`,
-    `Perda acumulada: ${formatCurrency(report.summary.perdaAcumulada)}`,
-    `Mes atual: ${formatCurrency(report.summary.vendaMesAtual)}`,
-    `Mes passado: ${formatCurrency(report.summary.vendaMesPassado)}`,
-    '',
-    'TOP CLIENTES:',
-    ...report.items.slice(0, report.filters.top || 5).flatMap((item: any, index: number) => ([
-      `${index + 1}. ${String(item.cliente || '').slice(0, 70)}`,
-      `   RCA: ${item.rca || '-'} | Cidade: ${item.cidade || '-'} | Cliente: ${item.cod_cliente || '-'}`,
-      `   Mes passado: ${formatCurrency(toNumber(item.mes_passado))} | Mes atual: ${formatCurrency(toNumber(item.mes_atual))}`,
-      `   Perda: ${formatCurrency(toNumber(item.perda_valor))} | Queda: ${item.perda_percentual}%`,
-      '',
-    ])),
-  ];
-  return lines;
+function sanitizePdfCell(value: unknown, maxLength = 32) {
+  const text = String(value ?? '-')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '-';
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
-function createSimplePdfBuffer(report: any) {
-  const lines = buildPdfTextLines(report);
-  const fontSize = 11;
-  const leading = 15;
-  const startY = 800;
-  const textOps = [
-    'BT',
-    '/F1 11 Tf',
-    `1 0 0 1 48 ${startY} Tm`,
-  ];
+function pdfText(x: number, y: number, text: string, font = 'F1', size = 10) {
+  return `BT /${font} ${size} Tf 1 0 0 1 ${x.toFixed(2)} ${y.toFixed(2)} Tm (${escapePdfText(text)}) Tj ET`;
+}
 
-  lines.forEach((line, index) => {
-    const safe = escapePdfText(line);
-    if (index === 0) textOps.push(`(${safe}) Tj`);
-    else textOps.push(`0 -${leading} Td (${safe}) Tj`);
+function pdfRect(x: number, y: number, w: number, h: number, fillRgb?: [number, number, number], strokeRgb?: [number, number, number], lineWidth = 1) {
+  const ops: string[] = [];
+  if (fillRgb) ops.push(`${fillRgb[0].toFixed(3)} ${fillRgb[1].toFixed(3)} ${fillRgb[2].toFixed(3)} rg`);
+  if (strokeRgb) ops.push(`${strokeRgb[0].toFixed(3)} ${strokeRgb[1].toFixed(3)} ${strokeRgb[2].toFixed(3)} RG ${lineWidth} w`);
+  ops.push(`${x.toFixed(2)} ${y.toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re`);
+  if (fillRgb && strokeRgb) ops.push('B');
+  else if (fillRgb) ops.push('f');
+  else ops.push('S');
+  return ops.join('\n');
+}
+
+function buildStyledPdfBuffer(report: any) {
+  const pageWidth = 595;
+  const pageHeight = 842;
+  const margin = 28;
+  const tableTop = 650;
+  const rowHeight = 22;
+  const headerHeight = 24;
+  const columns = [
+    { key: 'idx', label: '#', width: 24, align: 'left' },
+    { key: 'rca', label: 'RCA', width: 74, align: 'left' },
+    { key: 'cod_cliente', label: 'COD', width: 40, align: 'left' },
+    { key: 'cliente', label: 'RAZAO SOCIAL', width: 145, align: 'left' },
+    { key: 'cidade', label: 'CIDADE', width: 70, align: 'left' },
+    { key: 'mes_atual', label: 'MES ATUAL', width: 58, align: 'right' },
+    { key: 'mes_passado', label: 'MES PASSADO', width: 58, align: 'right' },
+    { key: 'perda_valor', label: 'PERDA', width: 52, align: 'right' },
+    { key: 'perda_percentual', label: 'VAR %', width: 42, align: 'right' },
+  ] as const;
+
+  const rows = report.items.slice(0, report.filters.top || 5).map((item: any, index: number) => ({
+    idx: String(index + 1),
+    rca: sanitizePdfCell(item.rca, 14),
+    cod_cliente: sanitizePdfCell(item.cod_cliente, 8),
+    cliente: sanitizePdfCell(item.cliente, 30),
+    cidade: sanitizePdfCell(item.cidade, 14),
+    mes_atual: formatCurrency(toNumber(item.mes_atual)),
+    mes_passado: formatCurrency(toNumber(item.mes_passado)),
+    perda_valor: formatCurrency(toNumber(item.perda_valor)),
+    perda_percentual: `${toNumber(item.perda_percentual).toFixed(2)}%`,
+  }));
+
+  const ops: string[] = [];
+  ops.push(pdfRect(0, 0, pageWidth, pageHeight, [1, 1, 1]));
+  ops.push(pdfRect(margin, 770, pageWidth - margin * 2, 40, [0.125, 0.286, 0.639]));
+  ops.push(pdfText(margin + 12, 794, 'RELATORIO - MAIORES QUEDAS', 'F2', 18));
+  ops.push(pdfText(margin + 12, 778, `Referencia: ${report.referenceDate}`, 'F1', 10));
+
+  const filtro = report.filters.vendedor ? `RCA ${report.filters.vendedor}` : report.filters.supervisor ? `Supervisor ${report.filters.supervisor}` : 'Sem filtro';
+  ops.push(pdfText(margin, 748, `Filtro: ${sanitizePdfCell(filtro, 80)}`, 'F2', 10));
+  ops.push(pdfText(margin + 180, 748, `Clientes em queda: ${report.summary.clientesEmQueda}`, 'F1', 10));
+  ops.push(pdfText(margin + 330, 748, `Perda acumulada: ${formatCurrency(report.summary.perdaAcumulada)}`, 'F1', 10));
+  ops.push(pdfText(margin, 730, `Mes atual: ${formatCurrency(report.summary.vendaMesAtual)}`, 'F1', 10));
+  ops.push(pdfText(margin + 180, 730, `Mes passado: ${formatCurrency(report.summary.vendaMesPassado)}`, 'F1', 10));
+  ops.push(pdfText(margin + 360, 730, `Dias uteis + sabado: ${report.periods.current_days}/${report.periods.previous_days}`, 'F1', 10));
+
+  ops.push(pdfRect(margin, tableTop, pageWidth - margin * 2, headerHeight, [0.125, 0.286, 0.639]));
+
+  let currentX = margin;
+  for (const column of columns) {
+    ops.push(pdfText(currentX + 4, tableTop + 7, column.label, 'F2', 8));
+    currentX += column.width;
+  }
+
+  rows.forEach((row: any, rowIndex: number) => {
+    const y = tableTop - ((rowIndex + 1) * rowHeight);
+    const fill: [number, number, number] = rowIndex % 2 === 0 ? [0.945, 0.961, 0.992] : [1, 1, 1];
+    ops.push(pdfRect(margin, y, pageWidth - margin * 2, rowHeight, fill, [0.82, 0.86, 0.93], 0.5));
+
+    let x = margin;
+    columns.forEach((column) => {
+      const raw = String((row as any)[column.key] ?? '-');
+      const text = sanitizePdfCell(raw, column.key === 'cliente' ? 30 : 16);
+      const approxCharWidth = 4.6;
+      const textWidth = Math.min(text.length * approxCharWidth, column.width - 8);
+      const textX = column.align === 'right' ? x + column.width - textWidth - 4 : x + 4;
+      ops.push(pdfText(textX, y + 7, text, 'F1', 8.5));
+      x += column.width;
+    });
   });
-  textOps.push('ET');
 
-  const contentStream = textOps.join('\n');
+  const tableBottom = tableTop - (rows.length * rowHeight);
+  ops.push(pdfRect(margin, tableBottom, pageWidth - margin * 2, headerHeight, [0.929, 0.945, 0.976], [0.82, 0.86, 0.93], 0.5));
+  ops.push(pdfText(margin + 6, tableBottom + 7, `Total exibido: ${rows.length} registro(s)`, 'F2', 9));
+  ops.push(pdfText(margin + 180, tableBottom + 7, `Gerado em: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`, 'F1', 9));
+
+  const contentStream = ops.join('\n');
   const objects = [
     '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj',
     '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj',
-    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>\nendobj',
     '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj',
-    `5 0 obj\n<< /Length ${Buffer.byteLength(contentStream, 'utf8')} >>\nstream\n${contentStream}\nendstream\nendobj`,
+    '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj',
+    `6 0 obj\n<< /Length ${Buffer.byteLength(contentStream, 'utf8')} >>\nstream\n${contentStream}\nendstream\nendobj`,
   ];
 
   let pdf = '%PDF-1.4\n';
@@ -434,7 +494,7 @@ app.get('/api/reports/maiores-quedas/preview', async (req, res) => {
   const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
   try {
     const report = await getMaioresQuedas({ referenceDate, top, vendedor, supervisor });
-    const pdfBuffer = createSimplePdfBuffer(report);
+    const pdfBuffer = buildStyledPdfBuffer(report);
     res.json({
       caption: buildMaioresQuedasCaption(report),
       report,
@@ -456,7 +516,7 @@ async function sendMaioresQuedasPdf(req: express.Request, res: express.Response)
   const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
   try {
     const report = await getMaioresQuedas({ referenceDate, top, vendedor, supervisor });
-    const pdfBuffer = createSimplePdfBuffer(report);
+    const pdfBuffer = buildStyledPdfBuffer(report);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="maiores-quedas-${referenceDate}.pdf"`);
     res.send(pdfBuffer);

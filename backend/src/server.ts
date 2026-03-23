@@ -665,6 +665,16 @@ app.post('/api/schedules/:id/run', async (req, res) => {
     res.status(500).json({ ok: false, message: error instanceof Error ? error.message : 'Erro ao executar regra' });
   }
 });
+app.delete('/api/schedules/:id', async (req, res) => {
+  try {
+    const result = await pool.query(`DELETE FROM public.daily_report_rules WHERE id = $1 RETURNING id, rule_name`, [req.params.id]);
+    if (!result.rowCount) return res.status(404).json({ ok: false, message: 'Campanha não encontrada' });
+    res.json({ ok: true, deleted: result.rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, message: 'Erro ao excluir campanha' });
+  }
+});
 
 app.get('/api/history', async (_req, res) => {
   try { const result = await pool.query(`SELECT id, rule_name, report_type_code, target_type, target_id, status, created_at, updated_at, payload_json, webhook_url, webhook_delivered, webhook_status, webhook_error FROM public.daily_report_executions ORDER BY id DESC LIMIT 50`); res.json(result.rows); }

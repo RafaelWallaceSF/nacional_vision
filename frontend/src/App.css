@@ -89,6 +89,7 @@ input, select { width: 100%; border: 1px solid #d7e0ea; background: #fff; color:
 .status-pill.ok { color: #166534; background: #dcfce7; border: 1px solid #86efac; }
 .bottom-grid { display: grid; gap: 20px; }
 .refined-bottom { grid-template-columns: 1.05fr .95fr; }
+.campaign-layout { grid-template-columns: .95fr 1.05fr; }
 .refined-schedule { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .group-member-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .member-actions, .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }

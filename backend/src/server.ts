@@ -48,6 +48,22 @@ function buildMaioresQuedasCaption(report: any) {
   ].join('\n');
 }
 
+function buildSemComprasCaption(report: any) {
+  const topItems = report.items.slice(0, report.filters.top || 20);
+  return [
+    `🛑 Sem Compras`,
+    `Referência: ${report.referenceDate}`,
+    `Filtro: ${report.filters.vendedor ? `RCA ${report.filters.vendedor}` : report.filters.supervisor ? `Supervisor ${report.filters.supervisor}` : 'sem filtro'}`,
+    `Clientes sem compra: ${report.summary.clientesSemCompra}`,
+    `Base perdida: ${formatCurrency(report.summary.basePerdida)}`,
+    `Mês atual: ${formatCurrency(report.summary.vendaMesAtual)} | Mês passado: ${formatCurrency(report.summary.vendaMesPassado)}`,
+    `Dias úteis + sábado: ${report.periods.current_days}/${report.periods.previous_days}`,
+    '',
+    `Top ${topItems.length}:`,
+    ...topItems.map((item: any, index: number) => `${index + 1}. ${item.cliente} — última base ${formatCurrency(toNumber(item.mes_passado))} — ${item.cidade} — ${item.rca}`),
+  ].join('\n');
+}
+
 function escapePdfText(value: string) {
   return value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 }
@@ -177,12 +193,23 @@ function buildStyledPdfBuffer(report: any) {
   return Buffer.from(pdf, 'utf8');
 }
 
+async function getComparisonPeriods(referenceDate: string) {
+  const periodsResult = await pool.query(`WITH params AS (SELECT $1::date AS ref_date), current_period AS (SELECT d::date AS day FROM params, generate_series(date_trunc('month', ref_date)::date, ref_date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7), count_days AS (SELECT COUNT(*)::int AS business_days FROM current_period), previous_period AS (SELECT d::date AS day FROM params, count_days, generate_series((date_trunc('month', ref_date) - interval '1 month')::date, (date_trunc('month', ref_date) - interval '1 day')::date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7 ORDER BY d LIMIT (SELECT business_days FROM count_days)) SELECT (SELECT MIN(day) FROM current_period) AS current_start, (SELECT MAX(day) FROM current_period) AS current_end, (SELECT COUNT(*) FROM current_period) AS current_days, (SELECT MIN(day) FROM previous_period) AS previous_start, (SELECT MAX(day) FROM previous_period) AS previous_end, (SELECT COUNT(*) FROM previous_period) AS previous_days`, [referenceDate]);
+  return periodsResult.rows[0];
+}
+
 async function getMaioresQuedas(params: { referenceDate: string; top: number; vendedor?: string; supervisor?: string }) {
   const { referenceDate, top, vendedor = '', supervisor = '' } = params;
-  const periodsResult = await pool.query(`WITH params AS (SELECT $1::date AS ref_date), current_period AS (SELECT d::date AS day FROM params, generate_series(date_trunc('month', ref_date)::date, ref_date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7), count_days AS (SELECT COUNT(*)::int AS business_days FROM current_period), previous_period AS (SELECT d::date AS day FROM params, count_days, generate_series((date_trunc('month', ref_date) - interval '1 month')::date, (date_trunc('month', ref_date) - interval '1 day')::date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7 ORDER BY d LIMIT (SELECT business_days FROM count_days)) SELECT (SELECT MIN(day) FROM current_period) AS current_start, (SELECT MAX(day) FROM current_period) AS current_end, (SELECT COUNT(*) FROM current_period) AS current_days, (SELECT MIN(day) FROM previous_period) AS previous_start, (SELECT MAX(day) FROM previous_period) AS previous_end, (SELECT COUNT(*) FROM previous_period) AS previous_days`, [referenceDate]);
-  const periods = periodsResult.rows[0];
+  const periods = await getComparisonPeriods(referenceDate);
   const reportResult = await pool.query(`WITH pedidos AS ( SELECT (raw_data->>'NUMPED') AS numped, (raw_data->>'CODCLI')::bigint AS codcli, MAX(raw_data->>'CLIENTE') AS cliente, MAX(raw_data->>'NOMECIDADE') AS cidade, MAX((raw_data->>'CODUSUR1')::bigint) AS codusur, MAX(TRIM(raw_data->>'VENDEDOR')) AS vendedor, MAX((raw_data->>'SUPERV')::bigint) AS codsuperv, (raw_data->>'DATA')::date AS data_pedido, SUM(REPLACE(raw_data->>'TOTAL', ',', '.')::numeric) AS total_pedido FROM staging."FATO_PEDIDO" WHERE raw_data->>'POSICAO' = 'F' AND (raw_data->>'DATA') IS NOT NULL GROUP BY 1,2,8 ), clientes AS ( SELECT DISTINCT ON ((raw_data->>'COD_CLIENTE')::bigint) (raw_data->>'COD_CLIENTE')::bigint AS cod_cliente, raw_data->>'NOME_CLIENTE' AS nome_cliente, raw_data->>'NOMECIDADE' AS nomecidade, raw_data->>'STATUS_CLIENTE' AS status_cliente, raw_data->>'TELEFONE_1' AS telefone_1, raw_data->>'TELEFONE_2' AS telefone_2, raw_data->>'TELEFONE_COMERCIAL' AS telefone_comercial, (raw_data->>'COD_VEND')::bigint AS cod_vend, (raw_data->>'COD_SUPERV')::bigint AS cod_superv, TRIM(raw_data->>'SUPERVISOR') AS supervisor FROM staging."DIM_CLIENTES" ), funcionarios AS ( SELECT DISTINCT ON ((raw_data->>'CODUSUR')::bigint) (raw_data->>'CODUSUR')::bigint AS codusur, TRIM(raw_data->>'NOME') AS nome_funcionario, (raw_data->>'CODSUPERVISOR')::bigint AS codsupervisor, raw_data->>'NOMEGERENTE' AS nomegerente FROM staging."DIM_FUNCIONARIOS" ), consolidado AS ( SELECT p.codcli AS cod_cliente, COALESCE(c.nome_cliente, p.cliente) AS cliente, COALESCE(c.nomecidade, p.cidade) AS cidade, COALESCE(f.nome_funcionario, p.vendedor) AS rca, COALESCE(c.supervisor, '') AS supervisor, COALESCE(NULLIF(c.telefone_1, ''), NULLIF(c.telefone_comercial, ''), NULLIF(c.telefone_2, '')) AS telefone, SUM(CASE WHEN p.data_pedido BETWEEN $1::date AND $2::date THEN p.total_pedido ELSE 0 END) AS mes_atual, SUM(CASE WHEN p.data_pedido BETWEEN $3::date AND $4::date THEN p.total_pedido ELSE 0 END) AS mes_passado FROM pedidos p LEFT JOIN clientes c ON c.cod_cliente = p.codcli LEFT JOIN funcionarios f ON f.codusur = p.codusur WHERE COALESCE(c.status_cliente, 'ATIVO') = 'ATIVO' AND ($7 = '' OR COALESCE(f.nome_funcionario, p.vendedor) = $7) AND ($8 = '' OR COALESCE(c.supervisor, '') = $8) GROUP BY 1,2,3,4,5,6 ) SELECT cod_cliente, cliente, cidade, rca, supervisor, telefone, ROUND(mes_passado, 2) AS mes_passado, ROUND(mes_atual, 2) AS mes_atual, ROUND(mes_atual - mes_passado, 2) AS perda_valor, ROUND(CASE WHEN mes_passado > 0 THEN ((mes_atual - mes_passado) / mes_passado) * 100 ELSE 0 END, 2) AS perda_percentual, ROUND((mes_atual / GREATEST($5::numeric, 1)) * $6::numeric, 2) AS projecao_mes, CASE WHEN mes_atual < mes_passado THEN 'queda' WHEN mes_atual > mes_passado THEN 'alta' ELSE 'estavel' END AS tendencia FROM consolidado WHERE mes_passado > 0 ORDER BY perda_valor ASC, mes_passado DESC LIMIT $9`, [periods.current_start, periods.current_end, periods.previous_start, periods.previous_end, periods.current_days, periods.previous_days, vendedor, supervisor, top]);
   return { referenceDate, periods, filters: { vendedor, supervisor, top }, summary: { clientesEmQueda: reportResult.rows.filter((row) => toNumber(row.perda_valor) < 0).length, perdaAcumulada: reportResult.rows.reduce((sum, row) => sum + Math.min(0, toNumber(row.perda_valor)), 0), vendaMesAtual: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_atual), 0), vendaMesPassado: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0) }, items: reportResult.rows };
+}
+
+async function getSemCompras(params: { referenceDate: string; top: number; vendedor?: string; supervisor?: string }) {
+  const { referenceDate, top, vendedor = '', supervisor = '' } = params;
+  const periods = await getComparisonPeriods(referenceDate);
+  const reportResult = await pool.query(`WITH pedidos AS ( SELECT (raw_data->>'NUMPED') AS numped, (raw_data->>'CODCLI')::bigint AS codcli, MAX(raw_data->>'CLIENTE') AS cliente, MAX(raw_data->>'NOMECIDADE') AS cidade, MAX((raw_data->>'CODUSUR1')::bigint) AS codusur, MAX(TRIM(raw_data->>'VENDEDOR')) AS vendedor, (raw_data->>'DATA')::date AS data_pedido, SUM(REPLACE(raw_data->>'TOTAL', ',', '.')::numeric) AS total_pedido FROM staging."FATO_PEDIDO" WHERE raw_data->>'POSICAO' = 'F' AND (raw_data->>'DATA') IS NOT NULL GROUP BY 1,2,7 ), clientes AS ( SELECT DISTINCT ON ((raw_data->>'COD_CLIENTE')::bigint) (raw_data->>'COD_CLIENTE')::bigint AS cod_cliente, raw_data->>'NOME_CLIENTE' AS nome_cliente, raw_data->>'NOMECIDADE' AS nomecidade, raw_data->>'STATUS_CLIENTE' AS status_cliente, raw_data->>'TELEFONE_1' AS telefone_1, raw_data->>'TELEFONE_2' AS telefone_2, raw_data->>'TELEFONE_COMERCIAL' AS telefone_comercial, TRIM(raw_data->>'SUPERVISOR') AS supervisor FROM staging."DIM_CLIENTES" ), funcionarios AS ( SELECT DISTINCT ON ((raw_data->>'CODUSUR')::bigint) (raw_data->>'CODUSUR')::bigint AS codusur, TRIM(raw_data->>'NOME') AS nome_funcionario FROM staging."DIM_FUNCIONARIOS" ), consolidado AS ( SELECT p.codcli AS cod_cliente, COALESCE(c.nome_cliente, p.cliente) AS cliente, COALESCE(c.nomecidade, p.cidade) AS cidade, COALESCE(f.nome_funcionario, p.vendedor) AS rca, COALESCE(c.supervisor, '') AS supervisor, COALESCE(NULLIF(c.telefone_1, ''), NULLIF(c.telefone_comercial, ''), NULLIF(c.telefone_2, '')) AS telefone, SUM(CASE WHEN p.data_pedido BETWEEN $1::date AND $2::date THEN p.total_pedido ELSE 0 END) AS mes_atual, SUM(CASE WHEN p.data_pedido BETWEEN $3::date AND $4::date THEN p.total_pedido ELSE 0 END) AS mes_passado FROM pedidos p LEFT JOIN clientes c ON c.cod_cliente = p.codcli LEFT JOIN funcionarios f ON f.codusur = p.codusur WHERE COALESCE(c.status_cliente, 'ATIVO') = 'ATIVO' AND ($5 = '' OR COALESCE(f.nome_funcionario, p.vendedor) = $5) AND ($6 = '' OR COALESCE(c.supervisor, '') = $6) GROUP BY 1,2,3,4,5,6 ) SELECT cod_cliente, cliente, cidade, rca, supervisor, telefone, ROUND(mes_passado, 2) AS mes_passado, ROUND(mes_atual, 2) AS mes_atual, ROUND(mes_passado, 2) AS potencial_recuperacao FROM consolidado WHERE mes_passado > 0 AND mes_atual = 0 ORDER BY mes_passado DESC, cliente ASC LIMIT $7`, [periods.current_start, periods.current_end, periods.previous_start, periods.previous_end, vendedor, supervisor, top]);
+  return { referenceDate, periods, filters: { vendedor, supervisor, top }, summary: { clientesSemCompra: reportResult.rows.length, basePerdida: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0), vendaMesAtual: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_atual), 0), vendaMesPassado: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0) }, items: reportResult.rows };
 }
 
 async function getAllVendedores() {
@@ -193,7 +220,7 @@ async function getAllVendedores() {
 function getReportCatalog() {
   return [
     { code: 'top_5_quedas', name: 'Maiores quedas', description: 'Clientes com retração / perda no período comparado.', implemented: true, defaults: { top: 5 } },
-    { code: 'sem_compras', name: 'Sem compras', description: 'Clientes sem compra no recorte selecionado.', implemented: false, defaults: { top: 20 } },
+    { code: 'sem_compras', name: 'Sem compras', description: 'Clientes sem compra no recorte selecionado.', implemented: true, defaults: { top: 20 } },
     { code: 'top_oportunidades', name: 'Top oportunidades', description: 'Ranking comercial priorizado para ação.', implemented: false, defaults: { top: 10 } },
     { code: 'top_10_maiores', name: '10 maiores', description: 'Maiores clientes / contas do período.', implemented: false, defaults: { top: 10 } },
   ];
@@ -229,14 +256,20 @@ async function executeCampaignRule(ruleId: string, referenceDate?: string) {
   for (const member of members) {
     const vendedor = member.member_type === 'vendedor' ? member.member_key : filters.vendedor || '';
     const supervisor = member.member_type === 'supervisor' ? member.member_key : filters.supervisor || '';
-    const report = await getMaioresQuedas({ referenceDate: effectiveReferenceDate, top: Number(filters.top) || 5, vendedor, supervisor });
-    const message = buildMaioresQuedasCaption(report);
-    const pdfBaseName = `maiores-quedas-${effectiveReferenceDate}-${String(member.member_label || member.member_key || 'destino').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'destino'}`;
+    const reportTop = Number(filters.top) || Number(reportMeta.defaults?.top) || 5;
+    const report = rule.report_type_code === 'sem_compras'
+      ? await getSemCompras({ referenceDate: effectiveReferenceDate, top: reportTop, vendedor, supervisor })
+      : await getMaioresQuedas({ referenceDate: effectiveReferenceDate, top: reportTop, vendedor, supervisor });
+    const message = rule.report_type_code === 'sem_compras' ? buildSemComprasCaption(report) : buildMaioresQuedasCaption(report);
+    const reportSlug = rule.report_type_code === 'sem_compras' ? 'sem-compras' : 'maiores-quedas';
+    const pdfBaseName = `${reportSlug}-${effectiveReferenceDate}-${String(member.member_label || member.member_key || 'destino').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'destino'}`;
     const pdfFileName = `${pdfBaseName}.pdf`;
-    const pdfUrlParams = new URLSearchParams({ referenceDate: effectiveReferenceDate, top: String(Number(filters.top) || 5) });
+    const pdfUrlParams = new URLSearchParams({ referenceDate: effectiveReferenceDate, top: String(reportTop) });
     if (vendedor) pdfUrlParams.set('vendedor', vendedor);
     if (supervisor) pdfUrlParams.set('supervisor', supervisor);
-    const publicPdfUrl = `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf/${pdfBaseName}.pdf?${pdfUrlParams.toString()}`;
+    const publicPdfUrl = rule.report_type_code === 'sem_compras'
+      ? `${PUBLIC_BASE_URL}/api/reports/sem-compras/pdf/${pdfBaseName}.pdf?${pdfUrlParams.toString()}`
+      : `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf/${pdfBaseName}.pdf?${pdfUrlParams.toString()}`;
     const webhookPayload = {
       contactName: member.member_label,
       contactPhone: member.destination || null,
@@ -541,6 +574,48 @@ async function sendMaioresQuedasPdf(req: express.Request, res: express.Response)
 
 app.get('/api/reports/maiores-quedas/pdf', sendMaioresQuedasPdf);
 app.get('/api/reports/maiores-quedas/pdf/:fileName.pdf', sendMaioresQuedasPdf);
+
+app.get('/api/reports/sem-compras', async (req, res) => {
+  const referenceDate = typeof req.query.referenceDate === 'string' ? req.query.referenceDate : new Date().toISOString().slice(0, 10);
+  const top = Math.min(Number(req.query.top || 20), 200);
+  const vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
+  const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
+  try { res.json(await getSemCompras({ referenceDate, top, vendedor, supervisor })); }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao gerar relatório de sem compras' }); }
+});
+
+async function sendSemComprasPdf(req: express.Request, res: express.Response) {
+  const referenceDate = typeof req.query.referenceDate === 'string' ? req.query.referenceDate : new Date().toISOString().slice(0, 10);
+  const top = Math.min(Number(req.query.top || 20), 50);
+  const vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
+  const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
+  try {
+    const report = await getSemCompras({ referenceDate, top, vendedor, supervisor });
+    const pdfBuffer = buildStyledPdfBuffer({
+      ...report,
+      summary: {
+        clientesEmQueda: report.summary.clientesSemCompra,
+        perdaAcumulada: report.summary.basePerdida,
+        vendaMesAtual: report.summary.vendaMesAtual,
+        vendaMesPassado: report.summary.vendaMesPassado,
+      },
+      items: report.items.map((item: any) => ({
+        ...item,
+        perda_valor: item.potencial_recuperacao,
+        perda_percentual: -100,
+      })),
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="sem-compras-${referenceDate}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erro ao gerar PDF do relatório sem compras' });
+  }
+}
+
+app.get('/api/reports/sem-compras/pdf', sendSemComprasPdf);
+app.get('/api/reports/sem-compras/pdf/:fileName.pdf', sendSemComprasPdf);
 
 app.get('/api/report-types', async (_req, res) => {
   res.json(getReportCatalog());

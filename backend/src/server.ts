@@ -77,8 +77,8 @@ function sanitizePdfCell(value: unknown, maxLength = 32) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
-function pdfText(x: number, y: number, text: string, font = 'F1', size = 10) {
-  return `BT /${font} ${size} Tf 1 0 0 1 ${x.toFixed(2)} ${y.toFixed(2)} Tm (${escapePdfText(text)}) Tj ET`;
+function pdfText(x: number, y: number, text: string, font = 'F1', size = 10, color: [number, number, number] = [0.06, 0.09, 0.16]) {
+  return `${color[0].toFixed(3)} ${color[1].toFixed(3)} ${color[2].toFixed(3)} rg\nBT /${font} ${size} Tf 1 0 0 1 ${x.toFixed(2)} ${y.toFixed(2)} Tm (${escapePdfText(text)}) Tj ET`;
 }
 
 function pdfRect(x: number, y: number, w: number, h: number, fillRgb?: [number, number, number], strokeRgb?: [number, number, number], lineWidth = 1) {

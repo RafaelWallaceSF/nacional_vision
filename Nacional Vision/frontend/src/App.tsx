@@ -10,9 +10,8 @@ type ReportAttachment = { kind: string; fileName: string; mimeType: string; size
 type Schedule = { id: number; rule_name: string; report_type_code: string; target_type: string; target_id: string; send_time: string; frequency: string; channel: string; active: boolean; recipients_json?: any[] }
 type HistoryItem = { id: number; rule_name: string; report_type_code: string; target_type: string; target_id: string; status: string; created_at: string; webhook_status?: number; webhook_error?: string | null }
 type Group = { id: number; name: string; group_type: string; delivery_mode: string; description?: string; active: boolean; members_count: number }
-type GroupMember = { id: number; group_id: number; member_type: string; member_key: string; member_label: string; channel?: string; destination?: string; active: boolean }
+type GroupMember = { id: number; group_id: number; group_name?: string; member_type: string; member_key: string; member_label: string; channel?: string; destination?: string; active: boolean }
 type WebhookInfo = { configured: boolean; webhookUrl: string | null }
-type WebhookTestLog = { id: number; employee_name: string; alias_name: string; phone: string; webhook_url?: string | null; response_status?: number | null; success: boolean; response_text?: string | null; error_message?: string | null; created_at: string }
 type ReportTypeOption = { code: string; name: string; description: string; implemented: boolean; defaults?: { top?: number } }
 
 type GroupMemberForm = { memberType: string; employeeName: string; aliasName: string; phone: string }
@@ -134,15 +133,10 @@ function ReportsPage() {
 function GroupsPage() {
   const [groups, setGroups] = useState<Group[]>([])
   const [selectedGroupId, setSelectedGroupId] = useState<string>('')
-  const [members, setMembers] = useState<GroupMember[]>([])
   const [message, setMessage] = useState('')
+  const [editingGroupId, setEditingGroupId] = useState<number | null>(null)
   const [groupForm, setGroupForm] = useState({ name: '', groupType: 'vendedor', deliveryMode: 'individual', description: '' })
-  const [memberForm, setMemberForm] = useState<GroupMemberForm>({ memberType: 'vendedor', employeeName: '', aliasName: '', phone: '' })
-  const [people, setPeople] = useState<PeopleOptions>({ funcionarios: [], vendedores: [], supervisores: [], gerentes: [] })
-  const [editingMemberId, setEditingMemberId] = useState<number | null>(null)
-  const [webhookTestMessage, setWebhookTestMessage] = useState('')
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo>({ configured: false, webhookUrl: null })
-  const [webhookTests, setWebhookTests] = useState<WebhookTestLog[]>([])
 
   async function loadGroups() {
     const response = await fetch('/api/groups')
@@ -151,137 +145,53 @@ function GroupsPage() {
     if (!selectedGroupId && data[0]) setSelectedGroupId(String(data[0].id))
   }
 
-  async function loadMembers(groupId: string) {
-    if (!groupId) return setMembers([])
-    const response = await fetch(`/api/groups/${groupId}/members`)
-    setMembers(await response.json())
-  }
-
-  async function loadPeople() {
-    const [funcionarios, vendedores, supervisores, gerentes] = await Promise.all([
-      fetch('/api/funcionarios').then((r) => r.json()),
-      fetch('/api/vendedores').then((r) => r.json()),
-      fetch('/api/supervisores').then((r) => r.json()),
-      fetch('/api/gerentes').then((r) => r.json()),
-    ])
-    setPeople({ funcionarios, vendedores, supervisores, gerentes })
-  }
-
   async function loadWebhookInfo() {
     const response = await fetch('/api/webhook/info')
     setWebhookInfo(await response.json())
   }
 
-  async function loadWebhookTests() {
-    const response = await fetch('/api/webhook/tests')
-    setWebhookTests(await response.json())
-  }
-
-  async function createGroup() {
+  async function saveGroup() {
     setMessage('')
-    const response = await fetch('/api/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(groupForm) })
+    const url = editingGroupId ? `/api/groups/${editingGroupId}` : '/api/groups'
+    const method = editingGroupId ? 'PUT' : 'POST'
+    const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(groupForm) })
     const json = await response.json()
-    if (!response.ok) return setMessage(json.message || 'Erro ao criar grupo')
+    if (!response.ok) return setMessage(json.message || 'Erro ao salvar grupo')
     setGroupForm({ name: '', groupType: 'vendedor', deliveryMode: 'individual', description: '' })
+    setEditingGroupId(null)
     setSelectedGroupId(String(json.id))
     await loadGroups()
-    setMessage(`Grupo criado #${json.id}`)
+    setMessage(editingGroupId ? `Grupo atualizado #${json.id}` : `Grupo criado #${json.id}`)
   }
 
-  function resetMemberForm() {
-    setEditingMemberId(null)
-    setMemberForm({ memberType: 'vendedor', employeeName: '', aliasName: '', phone: '' })
+  function handleEditGroup(group: Group) {
+    setEditingGroupId(group.id)
+    setGroupForm({ name: group.name, groupType: group.group_type, deliveryMode: group.delivery_mode, description: group.description || '' })
+    setMessage(`Editando grupo ${group.name}`)
   }
 
-  async function addMember() {
-    if (!selectedGroupId) return setMessage('Selecione um grupo')
-    if (!memberForm.employeeName.trim() || !memberForm.phone.trim()) return setMessage('Informe funcionário e telefone')
+  async function handleDeleteGroup(groupId: number) {
     setMessage('')
-    const payload = {
-      memberType: memberForm.memberType,
-      memberKey: memberForm.employeeName.trim(),
-      memberLabel: memberForm.aliasName.trim() || memberForm.employeeName.trim(),
-      channel: 'webhook',
-      destination: toWebhookPhone(memberForm.phone),
-    }
-    const url = editingMemberId ? `/api/groups/${selectedGroupId}/members/${editingMemberId}` : `/api/groups/${selectedGroupId}/members`
-    const method = editingMemberId ? 'PUT' : 'POST'
-    const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+    const response = await fetch(`/api/groups/${groupId}`, { method: 'DELETE' })
     const json = await response.json()
-    if (!response.ok) return setMessage(json.message || 'Erro ao salvar membro')
-    resetMemberForm()
-    await loadMembers(selectedGroupId)
+    if (!response.ok) return setMessage(json.message || 'Erro ao excluir grupo')
+    if (editingGroupId === groupId) {
+      setEditingGroupId(null)
+      setGroupForm({ name: '', groupType: 'vendedor', deliveryMode: 'individual', description: '' })
+    }
+    if (selectedGroupId === String(groupId)) setSelectedGroupId('')
     await loadGroups()
-    setMessage(editingMemberId ? `Membro atualizado #${json.id}` : `Membro adicionado #${json.id}`)
+    setMessage('Grupo removido com sucesso')
   }
 
-  function handleEditMember(member: GroupMember) {
-    setEditingMemberId(member.id)
-    setMemberForm({
-      memberType: member.member_type,
-      employeeName: member.member_key,
-      aliasName: member.member_label === member.member_key ? '' : member.member_label,
-      phone: formatPhoneDisplay(member.destination || ''),
-    })
-    setMessage('Editando membro selecionado')
+  function resetGroupForm() {
+    setEditingGroupId(null)
+    setGroupForm({ name: '', groupType: 'vendedor', deliveryMode: 'individual', description: '' })
   }
 
-  async function handleDeleteMember(memberId: number) {
-    if (!selectedGroupId) return
-    setMessage('')
-    const response = await fetch(`/api/groups/${selectedGroupId}/members/${memberId}`, { method: 'DELETE' })
-    const json = await response.json()
-    if (!response.ok) return setMessage(json.message || 'Erro ao excluir membro')
-    if (editingMemberId === memberId) resetMemberForm()
-    await loadMembers(selectedGroupId)
-    await loadGroups()
-    setMessage('Membro removido com sucesso')
-  }
+  useEffect(() => { loadGroups().catch(() => undefined); loadWebhookInfo().catch(() => undefined) }, [])
 
-  async function testWebhook() {
-    if (!memberForm.employeeName.trim() || !memberForm.phone.trim()) {
-      return setWebhookTestMessage('Informe funcionário e telefone para testar')
-    }
-    setWebhookTestMessage('Testando webhook...')
-    const response = await fetch('/api/webhook/test', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        employeeName: memberForm.employeeName.trim(),
-        aliasName: memberForm.aliasName.trim() || memberForm.employeeName.trim(),
-        phone: toWebhookPhone(memberForm.phone),
-      }),
-    })
-    const json = await response.json()
-    if (!response.ok) {
-      await loadWebhookTests().catch(() => undefined)
-      return setWebhookTestMessage(json.message || `Falha no teste (${json.status || response.status})`)
-    }
-    setWebhookTestMessage(`Webhook OK (${json.status})`)
-    await loadWebhookTests().catch(() => undefined)
-  }
-
-  useEffect(() => { loadGroups().catch(() => undefined); loadPeople().catch(() => undefined); loadWebhookInfo().catch(() => undefined); loadWebhookTests().catch(() => undefined) }, [])
-  useEffect(() => { loadMembers(selectedGroupId).catch(() => undefined) }, [selectedGroupId])
-
-  const memberOptions = memberForm.memberType === 'vendedor'
-    ? people.vendedores
-    : memberForm.memberType === 'supervisor'
-      ? people.supervisores
-      : memberForm.memberType === 'gerente'
-        ? people.gerentes
-        : people.funcionarios
-  const memberPlaceholder = memberForm.memberType === 'vendedor' ? 'Selecione o vendedor' : memberForm.memberType === 'supervisor' ? 'Selecione o supervisor' : memberForm.memberType === 'gerente' ? 'Selecione o gerente' : 'Selecione o funcionário'
-  const memberSourceMeta = memberForm.memberType === 'vendedor'
-    ? peopleSourceMeta.vendedores
-    : memberForm.memberType === 'supervisor'
-      ? peopleSourceMeta.supervisores
-      : memberForm.memberType === 'gerente'
-        ? peopleSourceMeta.gerentes
-        : peopleSourceMeta.funcionarios
-  const selectedGroup = groups.find((group) => String(group.id) === selectedGroupId)
-
-  return <section className="screen-block"><div className="hero-row"><div className="title-area"><h1>Grupos operacionais</h1><p>Organize vendedores, supervisores e destinos para campanhas.</p></div></div><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Webhook padrão</h2><p className="panel-subtitle">Destino fixo usado nos testes e disparos via webhook.</p></div></div><div className="webhook-info-row"><span className={`soft-badge ${webhookInfo.configured ? 'active' : ''}`}>{webhookInfo.configured ? 'Configurado' : 'Não configurado'}</span><code className="webhook-url">{webhookInfo.webhookUrl || 'Webhook padrão não configurado'}</code></div></div><div className="bottom-grid refined-bottom"><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Novo grupo</h2><p className="panel-subtitle">Base para campanhas por lote.</p></div></div><div className="toolbar-grid refined-schedule"><input value={groupForm.name} onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })} placeholder="Nome do grupo" /><select value={groupForm.groupType} onChange={(e) => setGroupForm({ ...groupForm, groupType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><select value={groupForm.deliveryMode} onChange={(e) => setGroupForm({ ...groupForm, deliveryMode: e.target.value })}><option value="individual">individual</option><option value="consolidado">consolidado</option></select><input value={groupForm.description} onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })} placeholder="Descrição" /><button className="primary-btn" onClick={createGroup}>Criar grupo</button></div><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Grupo</th><th>Tipo</th><th>Modo</th><th>Membros</th></tr></thead><tbody>{groups.map((group) => <tr key={group.id} className={String(group.id) === selectedGroupId ? 'selected-row' : ''} onClick={() => setSelectedGroupId(String(group.id))}><td>{group.name}</td><td>{group.group_type}</td><td>{group.delivery_mode}</td><td>{group.members_count}</td></tr>)}</tbody></table></div></div><div className="panel-shell"><div className="panel-head compact-head"><div><h2>{editingMemberId ? 'Editar usuário do grupo' : 'Adicionar usuário ao grupo'}</h2><p className="panel-subtitle">Grupo selecionado: {selectedGroup ? `${selectedGroup.name} (#${selectedGroup.id})` : 'nenhum'}</p></div></div><div className="toolbar-grid refined-schedule group-member-grid"><select value={memberForm.memberType} onChange={(e) => setMemberForm({ ...memberForm, memberType: e.target.value, employeeName: '' })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><select value={memberForm.employeeName} onChange={(e) => setMemberForm({ ...memberForm, employeeName: e.target.value })}><option value="">{memberPlaceholder} ({memberSourceMeta.source})</option>{memberOptions.map((employee) => <option key={employee} value={employee}>{employee}</option>)}</select><input value={memberForm.aliasName} onChange={(e) => setMemberForm({ ...memberForm, aliasName: e.target.value })} placeholder="Nome de exibição (opcional)" /><input value={memberForm.phone} onChange={(e) => setMemberForm({ ...memberForm, phone: formatPhoneDisplay(e.target.value) })} placeholder="Telefone" /><div className="input-like disabled">webhook fixo</div><div className="member-actions"><button className="primary-btn" onClick={addMember}>{editingMemberId ? 'Salvar usuário' : 'Adicionar usuário'}</button><button className="outline-btn" onClick={testWebhook}>Testar webhook</button>{editingMemberId ? <button className="outline-btn" onClick={resetMemberForm}>Cancelar edição</button> : null}</div></div><SourceHint meta={memberSourceMeta} count={memberOptions.length} />{message ? <p className="success-text">{message}</p> : null}{webhookTestMessage ? <p className="plain-text no-margin">{webhookTestMessage}</p> : null}<div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Nome no grupo</th><th>Funcionário base</th><th>Tipo</th><th>Canal</th><th>Telefone</th><th>Ações</th></tr></thead><tbody>{members.length ? members.map((member) => <tr key={member.id}><td>{member.member_label}</td><td>{member.member_key}</td><td>{member.member_type}</td><td>{member.channel || 'webhook'}</td><td>{member.destination ? formatPhoneDisplay(member.destination) : '-'}</td><td><div className="row-actions"><button className="outline-btn small-btn" onClick={() => handleEditMember(member)}>Editar</button><button className="outline-btn small-btn danger-btn" onClick={() => handleDeleteMember(member.id)}>Excluir</button></div></td></tr>) : <tr><td colSpan={6}><div className="plain-text">Nenhum usuário neste grupo ainda. Use o formulário acima para adicionar.</div></td></tr>}</tbody></table></div></div></div><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Histórico de testes</h2><p className="panel-subtitle">Últimos testes enviados para o webhook padrão.</p></div></div><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Quando</th><th>Nome</th><th>Telefone</th><th>Status</th><th>Resposta</th></tr></thead><tbody>{webhookTests.map((item) => <tr key={item.id}><td>{new Date(item.created_at).toLocaleString('pt-BR')}</td><td><div className="cell-title">{item.alias_name}</div><div className="cell-sub">{item.employee_name}</div></td><td>{formatPhoneDisplay(item.phone)}</td><td><span className={`status-pill ${item.success ? 'ok' : 'lost'}`}>{item.success ? `OK ${item.response_status || ''}`.trim() : `ERRO ${item.response_status || ''}`.trim()}</span></td><td>{item.error_message || item.response_text || '-'}</td></tr>)}</tbody></table></div></div></section>
+  return <section className="screen-block"><div className="hero-row"><div className="title-area"><h1>Grupos operacionais</h1><p>Aqui fica só a gestão dos grupos.</p></div></div><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Webhook padrão</h2><p className="panel-subtitle">Destino fixo usado nos disparos via webhook.</p></div></div><div className="webhook-info-row"><span className={`soft-badge ${webhookInfo.configured ? 'active' : ''}`}>{webhookInfo.configured ? 'Configurado' : 'Não configurado'}</span><code className="webhook-url">{webhookInfo.webhookUrl || 'Webhook padrão não configurado'}</code></div></div>{message ? <div className="panel-shell"><p className="success-text no-margin">{message}</p></div> : null}<div className="bottom-grid refined-bottom"><div className="panel-shell"><div className="panel-head compact-head"><div><h2>{editingGroupId ? 'Editar grupo' : 'Novo grupo'}</h2><p className="panel-subtitle">Base para campanhas por lote.</p></div></div><div className="toolbar-grid refined-schedule"><input value={groupForm.name} onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })} placeholder="Nome do grupo" /><select value={groupForm.groupType} onChange={(e) => setGroupForm({ ...groupForm, groupType: e.target.value })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><select value={groupForm.deliveryMode} onChange={(e) => setGroupForm({ ...groupForm, deliveryMode: e.target.value })}><option value="individual">individual</option><option value="consolidado">consolidado</option></select><input value={groupForm.description} onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })} placeholder="Descrição" /><button className="primary-btn" onClick={saveGroup}>{editingGroupId ? 'Salvar grupo' : 'Criar grupo'}</button>{editingGroupId ? <button className="outline-btn" onClick={resetGroupForm}>Cancelar</button> : null}</div></div><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Grupos cadastrados</h2><p className="panel-subtitle">Selecione, edite ou exclua grupos.</p></div></div><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Grupo</th><th>Tipo</th><th>Modo</th><th>Membros</th><th>Ações</th></tr></thead><tbody>{groups.map((group) => <tr key={group.id} className={String(group.id) === selectedGroupId ? 'selected-row' : ''}><td onClick={() => setSelectedGroupId(String(group.id))}>{group.name}</td><td onClick={() => setSelectedGroupId(String(group.id))}>{group.group_type}</td><td onClick={() => setSelectedGroupId(String(group.id))}>{group.delivery_mode}</td><td onClick={() => setSelectedGroupId(String(group.id))}>{group.members_count}</td><td><div className="row-actions"><button className="outline-btn small-btn" onClick={() => handleEditGroup(group)}>Editar</button><button className="outline-btn small-btn danger-btn" onClick={() => handleDeleteGroup(group.id)}>Excluir</button></div></td></tr>)}</tbody></table></div></div></div></section>
 }
 
 function CampaignsPage() {
@@ -372,7 +282,102 @@ function HistoryPage() {
   return <section className="screen-block"><div className="title-area"><h1>Histórico</h1><p>Execuções e auditoria.</p></div><div className="panel-shell"><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>ID</th><th>Regra</th><th>Alvo</th><th>Status</th><th>Webhook</th><th>Erro</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.id}</td><td>{item.rule_name}</td><td>{item.target_type}: {item.target_id}</td><td>{item.status}</td><td>{item.webhook_status || '-'}</td><td>{item.webhook_error || '-'}</td></tr>)}</tbody></table></div></div></section>
 }
 
-function UsersPage() { return <section className="screen-block"><div className="title-area"><h1>Usuários</h1><p>Módulo mantido para evolução posterior.</p></div><div className="panel-shell"><p className="plain-text">CRUD de usuários segue disponível na API e voltamos aqui quando quiser refinar permissões.</p></div></section> }
+function UsersPage() {
+  const [groups, setGroups] = useState<Group[]>([])
+  const [members, setMembers] = useState<GroupMember[]>([])
+  const [message, setMessage] = useState('')
+  const [editingMemberId, setEditingMemberId] = useState<number | null>(null)
+  const [editingMemberGroupId, setEditingMemberGroupId] = useState<string>('')
+  const [memberForm, setMemberForm] = useState<GroupMemberForm & { groupId: string }>({ groupId: '', memberType: 'vendedor', employeeName: '', aliasName: '', phone: '' })
+  const [people, setPeople] = useState<PeopleOptions>({ funcionarios: [], vendedores: [], supervisores: [], gerentes: [] })
+
+  async function loadGroups() {
+    const response = await fetch('/api/groups')
+    const data = await response.json()
+    setGroups(data)
+    setMemberForm((current) => current.groupId ? current : { ...current, groupId: data[0] ? String(data[0].id) : '' })
+  }
+
+  async function loadMembers() {
+    const response = await fetch('/api/members')
+    setMembers(await response.json())
+  }
+
+  async function loadPeople() {
+    const [funcionarios, vendedores, supervisores, gerentes] = await Promise.all([
+      fetch('/api/funcionarios').then((r) => r.json()),
+      fetch('/api/vendedores').then((r) => r.json()),
+      fetch('/api/supervisores').then((r) => r.json()),
+      fetch('/api/gerentes').then((r) => r.json()),
+    ])
+    setPeople({ funcionarios, vendedores, supervisores, gerentes })
+  }
+
+  function resetMemberForm() {
+    setEditingMemberId(null)
+    setEditingMemberGroupId('')
+    setMemberForm({ groupId: groups[0] ? String(groups[0].id) : '', memberType: 'vendedor', employeeName: '', aliasName: '', phone: '' })
+  }
+
+  async function saveMember() {
+    if (!memberForm.groupId) return setMessage('Selecione um grupo')
+    if (!memberForm.employeeName.trim() || !memberForm.phone.trim()) return setMessage('Informe usuário e telefone')
+    setMessage('')
+    const payload = {
+      groupId: memberForm.groupId,
+      memberType: memberForm.memberType,
+      memberKey: memberForm.employeeName.trim(),
+      memberLabel: memberForm.aliasName.trim() || memberForm.employeeName.trim(),
+      channel: 'webhook',
+      destination: toWebhookPhone(memberForm.phone),
+    }
+    const baseGroupId = editingMemberGroupId || memberForm.groupId
+    const url = editingMemberId ? `/api/groups/${baseGroupId}/members/${editingMemberId}` : `/api/groups/${memberForm.groupId}/members`
+    const method = editingMemberId ? 'PUT' : 'POST'
+    const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+    const json = await response.json()
+    if (!response.ok) return setMessage(json.message || 'Erro ao salvar usuário')
+    resetMemberForm()
+    await loadMembers()
+    await loadGroups()
+    setMessage(editingMemberId ? 'Usuário atualizado com sucesso' : 'Usuário adicionado com sucesso')
+  }
+
+  function handleEditMember(member: GroupMember) {
+    setEditingMemberId(member.id)
+    setEditingMemberGroupId(String(member.group_id))
+    setMemberForm({
+      groupId: String(member.group_id),
+      memberType: member.member_type,
+      employeeName: member.member_key,
+      aliasName: member.member_label === member.member_key ? '' : member.member_label,
+      phone: formatPhoneDisplay(member.destination || ''),
+    })
+    setMessage(`Editando usuário ${member.member_label}`)
+  }
+
+  async function handleDeleteMember(member: GroupMember) {
+    const response = await fetch(`/api/groups/${member.group_id}/members/${member.id}`, { method: 'DELETE' })
+    const json = await response.json()
+    if (!response.ok) return setMessage(json.message || 'Erro ao excluir usuário')
+    if (editingMemberId === member.id) resetMemberForm()
+    await loadMembers()
+    await loadGroups()
+    setMessage('Usuário removido com sucesso')
+  }
+
+  useEffect(() => { loadGroups().catch(() => undefined); loadMembers().catch(() => undefined); loadPeople().catch(() => undefined) }, [])
+
+  const memberOptions = memberForm.memberType === 'vendedor'
+    ? people.vendedores
+    : memberForm.memberType === 'supervisor'
+      ? people.supervisores
+      : memberForm.memberType === 'gerente'
+        ? people.gerentes
+        : people.funcionarios
+
+  return <section className="screen-block"><div className="title-area"><h1>Usuários</h1><p>Cadastro, edição e vínculo dos usuários com grupos.</p></div>{message ? <div className="panel-shell"><p className="success-text no-margin">{message}</p></div> : null}<div className="bottom-grid refined-bottom"><div className="panel-shell"><div className="panel-head compact-head"><div><h2>{editingMemberId ? 'Editar usuário' : 'Novo usuário'}</h2><p className="panel-subtitle">Cadastre o usuário e defina o grupo aqui.</p></div></div><div className="toolbar-grid refined-schedule group-member-grid"><select value={memberForm.groupId} onChange={(e) => setMemberForm({ ...memberForm, groupId: e.target.value })}><option value="">Selecione o grupo</option>{groups.map((group) => <option key={group.id} value={String(group.id)}>{group.name}</option>)}</select><select value={memberForm.memberType} onChange={(e) => setMemberForm({ ...memberForm, memberType: e.target.value, employeeName: '' })}><option value="vendedor">vendedor</option><option value="supervisor">supervisor</option><option value="gerente">gerente</option><option value="contato">contato</option></select><select value={memberForm.employeeName} onChange={(e) => setMemberForm({ ...memberForm, employeeName: e.target.value })}><option value="">Selecione o usuário</option>{memberOptions.map((employee) => <option key={employee} value={employee}>{employee}</option>)}</select><input value={memberForm.aliasName} onChange={(e) => setMemberForm({ ...memberForm, aliasName: e.target.value })} placeholder="Nome de exibição (opcional)" /><input value={memberForm.phone} onChange={(e) => setMemberForm({ ...memberForm, phone: formatPhoneDisplay(e.target.value) })} placeholder="Telefone" /><div className="member-actions"><button className="primary-btn" onClick={saveMember}>{editingMemberId ? 'Salvar usuário' : 'Adicionar usuário'}</button>{editingMemberId ? <button className="outline-btn" onClick={resetMemberForm}>Cancelar</button> : null}</div></div></div><div className="panel-shell"><div className="panel-head compact-head"><div><h2>Usuários cadastrados</h2><p className="panel-subtitle">Veja em qual grupo cada usuário está.</p></div></div><div className="table-wrap refined-wrap"><table className="modern-table refined-table"><thead><tr><th>Nome no grupo</th><th>Funcionário base</th><th>Grupo</th><th>Tipo</th><th>Telefone</th><th>Ações</th></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.member_label}</td><td>{member.member_key}</td><td>{member.group_name || member.group_id}</td><td>{member.member_type}</td><td>{member.destination ? formatPhoneDisplay(member.destination) : '-'}</td><td><div className="row-actions"><button className="outline-btn small-btn" onClick={() => handleEditMember(member)}>Editar</button><button className="outline-btn small-btn danger-btn" onClick={() => handleDeleteMember(member)}>Excluir</button></div></td></tr>)}</tbody></table></div></div></div></section>
+}
 function TopNav({ user, onLogout }: { user: User | null; onLogout: () => void }) { return <header className="top-nav"><div className="brand-area"><strong>Painel RW</strong><nav><NavLink to="/dashboard">Home</NavLink><NavLink to="/relatorios">Carteira</NavLink><NavLink to="/campanhas">Campanhas</NavLink><NavLink to="/grupos">Grupos</NavLink><NavLink to="/historico">Histórico</NavLink><NavLink to="/usuarios">Usuários</NavLink></nav></div><div className="user-area"><span>{user?.email}</span><button className="icon-btn" onClick={onLogout}>↪</button></div></header> }
 function ProtectedRoute({ isAuthenticated, children }: { isAuthenticated: boolean; children: any }) { return !isAuthenticated ? <Navigate to="/" replace /> : children }
 function ShellLayout({ user, onLogout }: { user: User | null; onLogout: () => void }) { return <div className="light-shell"><TopNav user={user} onLogout={onLogout} /><main className="page-container"><Routes><Route path="/dashboard" element={<DashboardPage />} /><Route path="/relatorios" element={<ReportsPage />} /><Route path="/campanhas" element={<CampaignsPage />} /><Route path="/grupos" element={<GroupsPage />} /><Route path="/historico" element={<HistoryPage />} /><Route path="/usuarios" element={<UsersPage />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></main></div> }

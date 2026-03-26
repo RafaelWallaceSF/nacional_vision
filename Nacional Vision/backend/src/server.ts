@@ -580,6 +580,31 @@ app.post('/api/groups', async (req, res) => {
   try { const result = await pool.query(`INSERT INTO public.report_groups (name, group_type, delivery_mode, description, active) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [name, groupType, deliveryMode, description, active]); res.status(201).json(result.rows[0]); }
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao criar grupo' }); }
 });
+app.put('/api/groups/:id', async (req, res) => {
+  const { name, groupType, deliveryMode = 'individual', description = '', active = true } = req.body ?? {};
+  if (!name || !groupType) return res.status(400).json({ message: 'name e groupType são obrigatórios' });
+  try {
+    const result = await pool.query(`UPDATE public.report_groups SET name = $1, group_type = $2, delivery_mode = $3, description = $4, active = $5, updated_at = NOW() WHERE id = $6 RETURNING *`, [name, groupType, deliveryMode, description, active, req.params.id]);
+    if (!result.rowCount) return res.status(404).json({ message: 'Grupo não encontrado' });
+    res.json(result.rows[0]);
+  }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao atualizar grupo' }); }
+});
+app.delete('/api/groups/:id', async (req, res) => {
+  try {
+    const result = await pool.query(`DELETE FROM public.report_groups WHERE id = $1 RETURNING id, name`, [req.params.id]);
+    if (!result.rowCount) return res.status(404).json({ message: 'Grupo não encontrado' });
+    res.json({ ok: true, deleted: result.rows[0] });
+  }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao excluir grupo' }); }
+});
+app.get('/api/members', async (_req, res) => {
+  try {
+    const result = await pool.query(`SELECT m.*, g.name AS group_name, g.id AS group_id, g.group_type, g.delivery_mode FROM public.report_group_members m INNER JOIN public.report_groups g ON g.id = m.group_id WHERE m.active = TRUE ORDER BY m.member_label ASC`);
+    res.json(result.rows);
+  }
+  catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar usuários dos grupos' }); }
+});
 app.get('/api/groups/:id/members', async (req, res) => {
   try { const result = await pool.query(`SELECT * FROM public.report_group_members WHERE group_id = $1 ORDER BY member_label ASC`, [req.params.id]); res.json(result.rows); }
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao listar membros do grupo' }); }
@@ -593,12 +618,13 @@ app.post('/api/groups/:id/members', async (req, res) => {
   catch (error) { console.error(error); res.status(500).json({ message: 'Erro ao adicionar membro ao grupo' }); }
 });
 app.put('/api/groups/:groupId/members/:memberId', async (req, res) => {
-  const { memberType, memberKey, memberLabel, channel = 'webhook', destination = null, active = true } = req.body ?? {};
+  const { memberType, memberKey, memberLabel, channel = 'webhook', destination = null, active = true, groupId } = req.body ?? {};
   if (!memberType || !memberKey || !memberLabel) return res.status(400).json({ message: 'memberType, memberKey e memberLabel são obrigatórios' });
   const normalizedDestination = normalizePhone(destination);
   if (!normalizedDestination) return res.status(400).json({ message: 'Telefone é obrigatório' });
   try {
-    const result = await pool.query(`UPDATE public.report_group_members SET member_type = $1, member_key = $2, member_label = $3, channel = $4, destination = $5, active = $6, updated_at = NOW() WHERE id = $7 AND group_id = $8 RETURNING *`, [memberType, memberKey, memberLabel, channel, normalizedDestination, active, req.params.memberId, req.params.groupId]);
+    const targetGroupId = groupId || req.params.groupId;
+    const result = await pool.query(`UPDATE public.report_group_members SET group_id = $1, member_type = $2, member_key = $3, member_label = $4, channel = $5, destination = $6, active = $7, updated_at = NOW() WHERE id = $8 AND group_id = $9 RETURNING *`, [targetGroupId, memberType, memberKey, memberLabel, channel, normalizedDestination, active, req.params.memberId, req.params.groupId]);
     if (!result.rowCount) return res.status(404).json({ message: 'Membro não encontrado' });
     res.json(result.rows[0]);
   }

@@ -51,17 +51,27 @@ function buildMaioresQuedasCaption(report: any) {
 function buildSemComprasCaption(report: any) {
   const topItems = report.items.slice(0, report.filters.top || 20);
   return [
-    `🛑 Sem Compras`,
+    `🛑 Clientes sem compras`,
     `Referência: ${report.referenceDate}`,
-    `Filtro: ${report.filters.vendedor ? `RCA ${report.filters.vendedor}` : report.filters.supervisor ? `Supervisor ${report.filters.supervisor}` : 'sem filtro'}`,
-    `Clientes sem compra: ${report.summary.clientesSemCompra}`,
+    `Nome: ${report.filters.vendedor || report.filters.supervisor || 'sem filtro'}`,
+    `Clientes sem compra no mês: ${report.summary.clientesSemCompra}`,
     `Base perdida: ${formatCurrency(report.summary.basePerdida)}`,
-    `Mês atual: ${formatCurrency(report.summary.vendaMesAtual)} | Mês passado: ${formatCurrency(report.summary.vendaMesPassado)}`,
-    `Dias úteis + sábado: ${report.periods.current_days}/${report.periods.previous_days}`,
     '',
     `Top ${topItems.length}:`,
-    ...topItems.map((item: any, index: number) => `${index + 1}. ${item.cliente} — última base ${formatCurrency(toNumber(item.mes_passado))} — ${item.cidade} — ${item.rca}`),
+    ...topItems.map((item: any, index: number) => `${index + 1}. ${item.cliente} — ${item.cidade} — contato ${item.telefone || '-'} — mês anterior ${formatCurrency(toNumber(item.mes_passado))} — média 3 meses ${formatCurrency(toNumber(item.media_3_meses))}`),
   ].join('\n');
+}
+
+async function findStoredReportRequest(reportTypeCode: string, fileName: string) {
+  const history = await pool.query(`SELECT payload_json FROM public.daily_report_executions WHERE report_type_code = $1 ORDER BY id DESC LIMIT 100`, [reportTypeCode]);
+  for (const row of history.rows) {
+    const payload = row.payload_json || {};
+    const itens = payload?.webhookPayload?.itens;
+    if (!Array.isArray(itens)) continue;
+    const found = itens.find((item: any) => String(item?.link_pdf || '').endsWith(`/${fileName}.pdf`) || String(item?.link_pdf || '').endsWith(`/${fileName}`));
+    if (found?.meta?.request) return found.meta.request;
+  }
+  return null;
 }
 
 function escapePdfText(value: string) {
@@ -193,6 +203,97 @@ function buildStyledPdfBuffer(report: any) {
   return Buffer.from(pdf, 'utf8');
 }
 
+function buildSemComprasPdfBuffer(report: any) {
+  const pageWidth = 595;
+  const pageHeight = 842;
+  const margin = 26;
+  const tableTop = 670;
+  const rowHeight = 22;
+  const headerHeight = 24;
+  const responsibleName = report.filters.vendedor || report.filters.supervisor || 'Todos';
+  const columns = [
+    { key: 'idx', label: '#', width: 22, align: 'left' },
+    { key: 'cod_cliente', label: 'CODIGO', width: 52, align: 'left' },
+    { key: 'cliente', label: 'NOME', width: 175, align: 'left' },
+    { key: 'cidade', label: 'CIDADE', width: 78, align: 'left' },
+    { key: 'telefone', label: 'CONTATO', width: 84, align: 'left' },
+    { key: 'mes_passado', label: 'VENDA MES ANTERIOR', width: 88, align: 'right' },
+    { key: 'media_3_meses', label: 'MEDIA 3 MESES', width: 70, align: 'right' },
+  ] as const;
+
+  const rows = report.items.slice(0, report.filters.top || 20).map((item: any, index: number) => ({
+    idx: String(index + 1),
+    cod_cliente: sanitizePdfCell(item.cod_cliente, 10),
+    cliente: sanitizePdfCell(item.cliente, 38),
+    cidade: sanitizePdfCell(item.cidade, 16),
+    telefone: sanitizePdfCell(item.telefone, 16),
+    mes_passado: formatCurrency(toNumber(item.mes_passado)),
+    media_3_meses: formatCurrency(toNumber(item.media_3_meses)),
+  }));
+
+  const ops: string[] = [];
+  ops.push(pdfRect(0, 0, pageWidth, pageHeight, [1, 1, 1]));
+  ops.push(pdfRect(margin, 770, pageWidth - margin * 2, 42, [0.125, 0.286, 0.639]));
+  ops.push(pdfText(margin + 12, 794, 'RELATORIO - CLIENTES SEM COMPRAS', 'F2', 16));
+  ops.push(pdfText(margin + 12, 778, `Data do relatorio: ${report.referenceDate}`, 'F1', 10));
+
+  ops.push(pdfText(margin, 748, `Nome: ${sanitizePdfCell(responsibleName, 60)}`, 'F2', 11));
+  ops.push(pdfText(margin + 270, 748, `Clientes sem compra no mes: ${report.summary.clientesSemCompra}`, 'F2', 11));
+  ops.push(pdfText(margin, 730, `Base perdida: ${formatCurrency(report.summary.basePerdida)}`, 'F1', 10));
+
+  ops.push(pdfRect(margin, tableTop, pageWidth - margin * 2, headerHeight, [0.125, 0.286, 0.639]));
+  let currentX = margin;
+  for (const column of columns) {
+    ops.push(pdfText(currentX + 4, tableTop + 7, column.label, 'F2', 7.5));
+    currentX += column.width;
+  }
+
+  rows.forEach((row: any, rowIndex: number) => {
+    const y = tableTop - ((rowIndex + 1) * rowHeight);
+    const fill: [number, number, number] = rowIndex % 2 === 0 ? [0.945, 0.961, 0.992] : [1, 1, 1];
+    ops.push(pdfRect(margin, y, pageWidth - margin * 2, rowHeight, fill, [0.82, 0.86, 0.93], 0.5));
+    let x = margin;
+    columns.forEach((column) => {
+      const raw = String((row as any)[column.key] ?? '-');
+      const text = sanitizePdfCell(raw, column.key === 'cliente' ? 38 : 18);
+      const approxCharWidth = 4.4;
+      const textWidth = Math.min(text.length * approxCharWidth, column.width - 8);
+      const textX = column.align === 'right' ? x + column.width - textWidth - 4 : x + 4;
+      ops.push(pdfText(textX, y + 7, text, 'F1', 8));
+      x += column.width;
+    });
+  });
+
+  const tableBottom = tableTop - (rows.length * rowHeight);
+  ops.push(pdfRect(margin, tableBottom, pageWidth - margin * 2, headerHeight, [0.929, 0.945, 0.976], [0.82, 0.86, 0.93], 0.5));
+  ops.push(pdfText(margin + 6, tableBottom + 7, `Total exibido: ${rows.length} registro(s)`, 'F2', 9));
+
+  const contentStream = ops.join('\n');
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>\nendobj',
+    '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj',
+    '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj',
+    `6 0 obj\n<< /Length ${Buffer.byteLength(contentStream, 'utf8')} >>\nstream\n${contentStream}\nendstream\nendobj`,
+  ];
+
+  let pdf = '%PDF-1.4\n';
+  const offsets: number[] = [0];
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(pdf, 'utf8'));
+    pdf += `${object}\n`;
+  }
+  const xrefOffset = Buffer.byteLength(pdf, 'utf8');
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += '0000000000 65535 f \n';
+  for (let i = 1; i <= objects.length; i += 1) {
+    pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return Buffer.from(pdf, 'utf8');
+}
+
 async function getComparisonPeriods(referenceDate: string) {
   const periodsResult = await pool.query(`WITH params AS (SELECT $1::date AS ref_date), current_period AS (SELECT d::date AS day FROM params, generate_series(date_trunc('month', ref_date)::date, ref_date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7), count_days AS (SELECT COUNT(*)::int AS business_days FROM current_period), previous_period AS (SELECT d::date AS day FROM params, count_days, generate_series((date_trunc('month', ref_date) - interval '1 month')::date, (date_trunc('month', ref_date) - interval '1 day')::date, interval '1 day') d WHERE EXTRACT(ISODOW FROM d) < 7 ORDER BY d LIMIT (SELECT business_days FROM count_days)) SELECT (SELECT MIN(day) FROM current_period) AS current_start, (SELECT MAX(day) FROM current_period) AS current_end, (SELECT COUNT(*) FROM current_period) AS current_days, (SELECT MIN(day) FROM previous_period) AS previous_start, (SELECT MAX(day) FROM previous_period) AS previous_end, (SELECT COUNT(*) FROM previous_period) AS previous_days`, [referenceDate]);
   return periodsResult.rows[0];
@@ -208,7 +309,83 @@ async function getMaioresQuedas(params: { referenceDate: string; top: number; ve
 async function getSemCompras(params: { referenceDate: string; top: number; vendedor?: string; supervisor?: string }) {
   const { referenceDate, top, vendedor = '', supervisor = '' } = params;
   const periods = await getComparisonPeriods(referenceDate);
-  const reportResult = await pool.query(`WITH pedidos AS ( SELECT (raw_data->>'NUMPED') AS numped, (raw_data->>'CODCLI')::bigint AS codcli, MAX(raw_data->>'CLIENTE') AS cliente, MAX(raw_data->>'NOMECIDADE') AS cidade, MAX((raw_data->>'CODUSUR1')::bigint) AS codusur, MAX(TRIM(raw_data->>'VENDEDOR')) AS vendedor, (raw_data->>'DATA')::date AS data_pedido, SUM(REPLACE(raw_data->>'TOTAL', ',', '.')::numeric) AS total_pedido FROM staging."FATO_PEDIDO" WHERE raw_data->>'POSICAO' = 'F' AND (raw_data->>'DATA') IS NOT NULL GROUP BY 1,2,7 ), clientes AS ( SELECT DISTINCT ON ((raw_data->>'COD_CLIENTE')::bigint) (raw_data->>'COD_CLIENTE')::bigint AS cod_cliente, raw_data->>'NOME_CLIENTE' AS nome_cliente, raw_data->>'NOMECIDADE' AS nomecidade, raw_data->>'STATUS_CLIENTE' AS status_cliente, raw_data->>'TELEFONE_1' AS telefone_1, raw_data->>'TELEFONE_2' AS telefone_2, raw_data->>'TELEFONE_COMERCIAL' AS telefone_comercial, TRIM(raw_data->>'SUPERVISOR') AS supervisor FROM staging."DIM_CLIENTES" ), funcionarios AS ( SELECT DISTINCT ON ((raw_data->>'CODUSUR')::bigint) (raw_data->>'CODUSUR')::bigint AS codusur, TRIM(raw_data->>'NOME') AS nome_funcionario FROM staging."DIM_FUNCIONARIOS" ), consolidado AS ( SELECT p.codcli AS cod_cliente, COALESCE(c.nome_cliente, p.cliente) AS cliente, COALESCE(c.nomecidade, p.cidade) AS cidade, COALESCE(f.nome_funcionario, p.vendedor) AS rca, COALESCE(c.supervisor, '') AS supervisor, COALESCE(NULLIF(c.telefone_1, ''), NULLIF(c.telefone_comercial, ''), NULLIF(c.telefone_2, '')) AS telefone, SUM(CASE WHEN p.data_pedido BETWEEN $1::date AND $2::date THEN p.total_pedido ELSE 0 END) AS mes_atual, SUM(CASE WHEN p.data_pedido BETWEEN $3::date AND $4::date THEN p.total_pedido ELSE 0 END) AS mes_passado FROM pedidos p LEFT JOIN clientes c ON c.cod_cliente = p.codcli LEFT JOIN funcionarios f ON f.codusur = p.codusur WHERE COALESCE(c.status_cliente, 'ATIVO') = 'ATIVO' AND ($5 = '' OR COALESCE(f.nome_funcionario, p.vendedor) = $5) AND ($6 = '' OR COALESCE(c.supervisor, '') = $6) GROUP BY 1,2,3,4,5,6 ) SELECT cod_cliente, cliente, cidade, rca, supervisor, telefone, ROUND(mes_passado, 2) AS mes_passado, ROUND(mes_atual, 2) AS mes_atual, ROUND(mes_passado, 2) AS potencial_recuperacao FROM consolidado WHERE mes_passado > 0 AND mes_atual = 0 ORDER BY mes_passado DESC, cliente ASC LIMIT $7`, [periods.current_start, periods.current_end, periods.previous_start, periods.previous_end, vendedor, supervisor, top]);
+  const reportResult = await pool.query(`
+    WITH limites AS (
+      SELECT
+        $1::date AS current_start,
+        $2::date AS current_end,
+        $3::date AS previous_start,
+        $4::date AS previous_end,
+        date_trunc('month', $1::date - interval '3 month')::date AS avg_start,
+        (date_trunc('month', $1::date) - interval '1 day')::date AS avg_end
+    ),
+    pedidos AS (
+      SELECT
+        (raw_data->>'CODCLI')::bigint AS codcli,
+        MAX(raw_data->>'CLIENTE') AS cliente,
+        MAX(raw_data->>'NOMECIDADE') AS cidade,
+        MAX((raw_data->>'CODUSUR1')::bigint) AS codusur,
+        MAX(TRIM(raw_data->>'VENDEDOR')) AS vendedor,
+        (raw_data->>'DATA')::date AS data_pedido,
+        SUM(REPLACE(raw_data->>'TOTAL', ',', '.')::numeric) AS total_pedido
+      FROM staging."FATO_PEDIDO"
+      WHERE raw_data->>'POSICAO' = 'F' AND (raw_data->>'DATA') IS NOT NULL
+      GROUP BY 1,6
+    ),
+    clientes AS (
+      SELECT DISTINCT ON ((raw_data->>'COD_CLIENTE')::bigint)
+        (raw_data->>'COD_CLIENTE')::bigint AS cod_cliente,
+        raw_data->>'NOME_CLIENTE' AS nome_cliente,
+        raw_data->>'NOMECIDADE' AS nomecidade,
+        raw_data->>'STATUS_CLIENTE' AS status_cliente,
+        raw_data->>'TELEFONE_1' AS telefone_1,
+        raw_data->>'TELEFONE_2' AS telefone_2,
+        raw_data->>'TELEFONE_COMERCIAL' AS telefone_comercial,
+        TRIM(raw_data->>'SUPERVISOR') AS supervisor
+      FROM staging."DIM_CLIENTES"
+    ),
+    funcionarios AS (
+      SELECT DISTINCT ON ((raw_data->>'CODUSUR')::bigint)
+        (raw_data->>'CODUSUR')::bigint AS codusur,
+        TRIM(raw_data->>'NOME') AS nome_funcionario
+      FROM staging."DIM_FUNCIONARIOS"
+    ),
+    consolidado AS (
+      SELECT
+        p.codcli AS cod_cliente,
+        COALESCE(c.nome_cliente, p.cliente) AS cliente,
+        COALESCE(c.nomecidade, p.cidade) AS cidade,
+        COALESCE(f.nome_funcionario, p.vendedor) AS rca,
+        COALESCE(c.supervisor, '') AS supervisor,
+        COALESCE(NULLIF(c.telefone_1, ''), NULLIF(c.telefone_comercial, ''), NULLIF(c.telefone_2, '')) AS telefone,
+        SUM(CASE WHEN p.data_pedido BETWEEN l.current_start AND l.current_end THEN p.total_pedido ELSE 0 END) AS mes_atual,
+        SUM(CASE WHEN p.data_pedido BETWEEN l.previous_start AND l.previous_end THEN p.total_pedido ELSE 0 END) AS mes_passado,
+        ROUND(SUM(CASE WHEN p.data_pedido BETWEEN l.avg_start AND l.avg_end THEN p.total_pedido ELSE 0 END) / 3.0, 2) AS media_3_meses
+      FROM pedidos p
+      CROSS JOIN limites l
+      LEFT JOIN clientes c ON c.cod_cliente = p.codcli
+      LEFT JOIN funcionarios f ON f.codusur = p.codusur
+      WHERE COALESCE(c.status_cliente, 'ATIVO') = 'ATIVO'
+        AND ($5 = '' OR COALESCE(f.nome_funcionario, p.vendedor) = $5)
+        AND ($6 = '' OR COALESCE(c.supervisor, '') = $6)
+      GROUP BY 1,2,3,4,5,6
+    )
+    SELECT
+      cod_cliente,
+      cliente,
+      cidade,
+      rca,
+      supervisor,
+      telefone,
+      ROUND(mes_passado, 2) AS mes_passado,
+      ROUND(mes_atual, 2) AS mes_atual,
+      ROUND(media_3_meses, 2) AS media_3_meses,
+      ROUND(mes_passado, 2) AS potencial_recuperacao
+    FROM consolidado
+    WHERE mes_passado > 0 AND mes_atual = 0
+    ORDER BY mes_passado DESC, cliente ASC
+    LIMIT $7
+  `, [periods.current_start, periods.current_end, periods.previous_start, periods.previous_end, vendedor, supervisor, top]);
   return { referenceDate, periods, filters: { vendedor, supervisor, top }, summary: { clientesSemCompra: reportResult.rows.length, basePerdida: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0), vendaMesAtual: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_atual), 0), vendaMesPassado: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0) }, items: reportResult.rows };
 }
 
@@ -271,12 +448,9 @@ async function executeCampaignRule(ruleId: string, referenceDate?: string) {
 
     const memberName = String(member.member_label || member.member_key || '').trim();
     const pdfBaseName = `${reportSlug}-${effectiveReferenceDate}-${String(memberName || 'destino').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'destino'}`;
-    const pdfUrlParams = new URLSearchParams({ referenceDate: effectiveReferenceDate, top: String(reportTop) });
-    if (vendedor) pdfUrlParams.set('vendedor', vendedor);
-    if (supervisor) pdfUrlParams.set('supervisor', supervisor);
     const linkPdf = rule.report_type_code === 'sem_compras'
-      ? `${PUBLIC_BASE_URL}/api/reports/sem-compras/pdf/${pdfBaseName}.pdf?${pdfUrlParams.toString()}`
-      : `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf/${pdfBaseName}.pdf?${pdfUrlParams.toString()}`;
+      ? `${PUBLIC_BASE_URL}/api/reports/sem-compras/pdf/${pdfBaseName}.pdf`
+      : `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf/${pdfBaseName}.pdf`;
 
     batchItems.push({
       nome: memberName,
@@ -288,9 +462,15 @@ async function executeCampaignRule(ruleId: string, referenceDate?: string) {
       campanha: safeCampaignName,
       meta: {
         memberKey: member.member_key,
-        filters: report.filters,
         referenceDate: report.referenceDate,
         periodRef,
+        request: {
+          referenceDate: effectiveReferenceDate,
+          top: reportTop,
+          vendedor,
+          supervisor,
+          nome: memberName,
+        },
       },
     });
   }
@@ -606,26 +786,27 @@ app.get('/api/reports/sem-compras', async (req, res) => {
 });
 
 async function sendSemComprasPdf(req: express.Request, res: express.Response) {
-  const referenceDate = typeof req.query.referenceDate === 'string' ? req.query.referenceDate : new Date().toISOString().slice(0, 10);
-  const top = Math.min(Number(req.query.top || 20), 50);
-  const vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
-  const supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
+  let referenceDate = typeof req.query.referenceDate === 'string' ? req.query.referenceDate : '';
+  let top = Math.min(Number(req.query.top || 20), 50);
+  let vendedor = typeof req.query.vendedor === 'string' ? req.query.vendedor : '';
+  let supervisor = typeof req.query.supervisor === 'string' ? req.query.supervisor : '';
+
+  const cleanFileName = Array.isArray(req.params.fileName) ? req.params.fileName[0] : req.params.fileName;
+  if (!referenceDate && cleanFileName) {
+    const stored = await findStoredReportRequest('sem_compras', cleanFileName);
+    if (stored) {
+      referenceDate = stored.referenceDate || referenceDate;
+      top = Math.min(Number(stored.top || top), 50);
+      vendedor = stored.vendedor || vendedor;
+      supervisor = stored.supervisor || supervisor;
+    }
+  }
+
+  if (!referenceDate) referenceDate = new Date().toISOString().slice(0, 10);
+
   try {
     const report = await getSemCompras({ referenceDate, top, vendedor, supervisor });
-    const pdfBuffer = buildStyledPdfBuffer({
-      ...report,
-      summary: {
-        clientesEmQueda: report.summary.clientesSemCompra,
-        perdaAcumulada: report.summary.basePerdida,
-        vendaMesAtual: report.summary.vendaMesAtual,
-        vendaMesPassado: report.summary.vendaMesPassado,
-      },
-      items: report.items.map((item: any) => ({
-        ...item,
-        perda_valor: item.potencial_recuperacao,
-        perda_percentual: -100,
-      })),
-    });
+    const pdfBuffer = buildSemComprasPdfBuffer(report);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="sem-compras-${referenceDate}.pdf"`);
     res.send(pdfBuffer);

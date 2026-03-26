@@ -251,99 +251,120 @@ async function executeCampaignRule(ruleId: string, referenceDate?: string) {
     members = [{ member_type: rule.target_type, member_key: rule.target_id, member_label: rule.target_id, channel: rule.channel, destination: rule.target_id }];
   }
 
-  const executions = [];
+  const reportTop = Number(filters.top) || Number(reportMeta.defaults?.top) || 5;
+  const campaignHour = String(rule.send_time || '').slice(0, 5) || new Date().toISOString().slice(11, 16);
+  const safeCampaignName = String(rule.rule_name || `campanha-${rule.id}`)
+    .replace(/\s+/g, ' ')
+    .trim();
+  const reportTypeLabel = reportMeta.name;
+  const reportSlug = rule.report_type_code === 'sem_compras' ? 'sem-compras' : 'maiores-quedas';
+  const campaignBatchId = `campaign-${rule.id}-${Date.now()}`;
+  const periodRef = effectiveReferenceDate.slice(0, 7).replace('-', '');
+  const batchItems: any[] = [];
 
   for (const member of members) {
     const vendedor = member.member_type === 'vendedor' ? member.member_key : filters.vendedor || '';
     const supervisor = member.member_type === 'supervisor' ? member.member_key : filters.supervisor || '';
-    const reportTop = Number(filters.top) || Number(reportMeta.defaults?.top) || 5;
     const report = rule.report_type_code === 'sem_compras'
       ? await getSemCompras({ referenceDate: effectiveReferenceDate, top: reportTop, vendedor, supervisor })
       : await getMaioresQuedas({ referenceDate: effectiveReferenceDate, top: reportTop, vendedor, supervisor });
-    const message = rule.report_type_code === 'sem_compras' ? buildSemComprasCaption(report) : buildMaioresQuedasCaption(report);
-    const reportSlug = rule.report_type_code === 'sem_compras' ? 'sem-compras' : 'maiores-quedas';
-    const pdfBaseName = `${reportSlug}-${effectiveReferenceDate}-${String(member.member_label || member.member_key || 'destino').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'destino'}`;
-    const pdfFileName = `${pdfBaseName}.pdf`;
+
+    const memberName = String(member.member_label || member.member_key || '').trim();
+    const pdfBaseName = `${reportSlug}-${effectiveReferenceDate}-${String(memberName || 'destino').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'destino'}`;
     const pdfUrlParams = new URLSearchParams({ referenceDate: effectiveReferenceDate, top: String(reportTop) });
     if (vendedor) pdfUrlParams.set('vendedor', vendedor);
     if (supervisor) pdfUrlParams.set('supervisor', supervisor);
-    const publicPdfUrl = rule.report_type_code === 'sem_compras'
+    const linkPdf = rule.report_type_code === 'sem_compras'
       ? `${PUBLIC_BASE_URL}/api/reports/sem-compras/pdf/${pdfBaseName}.pdf?${pdfUrlParams.toString()}`
       : `${PUBLIC_BASE_URL}/api/reports/maiores-quedas/pdf/${pdfBaseName}.pdf?${pdfUrlParams.toString()}`;
-    const webhookPayload = {
-      contactName: member.member_label,
-      contactPhone: member.destination || null,
-      reportName: reportMeta.name,
-      reportFileName: pdfFileName,
-      reportPdfUrl: publicPdfUrl,
-      message,
+
+    batchItems.push({
+      nome: memberName,
+      tipo: member.member_type,
+      telefone: member.destination || null,
+      tipo_relatorio: rule.report_type_code,
+      link_pdf: linkPdf,
+      hora: campaignHour,
+      campanha: safeCampaignName,
       meta: {
-        campaign: { ruleId: rule.id, ruleName: rule.rule_name, reportCode: rule.report_type_code },
-        member: {
-          type: member.member_type,
-          key: member.member_key,
-          label: member.member_label,
-          phone: member.destination || null,
-          destination: member.destination || null,
-        },
-        delivery: { channel: 'webhook', webhookUrl },
+        memberKey: member.member_key,
         filters: report.filters,
         referenceDate: report.referenceDate,
+        periodRef,
       },
-    };
-
-    let delivered = false;
-    let statusCode: number | null = null;
-    let webhookError: string | null = null;
-    let responseBody: any = null;
-
-    if (webhookUrl) {
-      try {
-        const response = await fetch(webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(webhookPayload),
-        });
-        statusCode = response.status;
-        delivered = response.ok;
-        const text = await response.text();
-        responseBody = text;
-        if (!response.ok) webhookError = `Webhook HTTP ${response.status}`;
-      } catch (error) {
-        webhookError = error instanceof Error ? error.message : 'Falha ao enviar webhook';
-      }
-    } else {
-      webhookError = 'Webhook não configurado';
-    }
-
-    const executionResult = await pool.query(
-      `INSERT INTO public.daily_report_executions (
-        rule_id, rule_name, report_type_code, target_type, target_id, channel, reference_date,
-        recipients_json, payload_json, webhook_url, webhook_delivered, webhook_status, webhook_error, status
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14)
-      RETURNING id, status, webhook_delivered, webhook_status, webhook_error, created_at`,
-      [
-        rule.id,
-        rule.rule_name,
-        rule.report_type_code,
-        member.member_type,
-        member.member_key,
-        'webhook',
-        effectiveReferenceDate,
-        JSON.stringify([{ member }]),
-        JSON.stringify({ webhookPayload, responseBody }),
-        webhookUrl,
-        delivered,
-        statusCode,
-        webhookError,
-        delivered ? 'delivered' : 'error',
-      ],
-    );
-
-    executions.push({ member: member.member_label, delivered, statusCode, webhookError, execution: executionResult.rows[0] });
+    });
   }
 
-  return { ruleId: rule.id, ruleName: rule.rule_name, membersProcessed: members.length, executions };
+  const webhookPayload = {
+    event: 'campaign.batch_dispatch',
+    campanha_id: String(rule.id),
+    campanha_nome: safeCampaignName,
+    hora: campaignHour,
+    tipo_relatorio: rule.report_type_code,
+    nome_relatorio: reportTypeLabel,
+    reference_date: effectiveReferenceDate,
+    total_itens: batchItems.length,
+    itens: batchItems,
+  };
+
+  let delivered = false;
+  let statusCode: number | null = null;
+  let webhookError: string | null = null;
+  let responseBody: any = null;
+
+  if (webhookUrl) {
+    try {
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(webhookPayload),
+      });
+      statusCode = response.status;
+      delivered = response.ok;
+      const text = await response.text();
+      responseBody = text;
+      if (!response.ok) webhookError = `Webhook HTTP ${response.status}`;
+    } catch (error) {
+      webhookError = error instanceof Error ? error.message : 'Falha ao enviar webhook';
+    }
+  } else {
+    webhookError = 'Webhook não configurado';
+  }
+
+  const executionResult = await pool.query(
+    `INSERT INTO public.daily_report_executions (
+      rule_id, rule_name, report_type_code, target_type, target_id, channel, reference_date,
+      recipients_json, payload_json, webhook_url, webhook_delivered, webhook_status, webhook_error, status
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14)
+    RETURNING id, status, webhook_delivered, webhook_status, webhook_error, created_at`,
+    [
+      rule.id,
+      rule.rule_name,
+      rule.report_type_code,
+      rule.target_type,
+      rule.target_id,
+      'webhook',
+      effectiveReferenceDate,
+      JSON.stringify(batchItems.map((item) => ({ nome: item.nome, tipo: item.tipo, telefone: item.telefone }))),
+      JSON.stringify({ batchId: campaignBatchId, webhookPayload, responseBody }),
+      webhookUrl,
+      delivered,
+      statusCode,
+      webhookError,
+      delivered ? 'delivered' : 'error',
+    ],
+  );
+
+  return {
+    ruleId: rule.id,
+    ruleName: rule.rule_name,
+    membersProcessed: members.length,
+    batchId: campaignBatchId,
+    delivered,
+    statusCode,
+    webhookError,
+    execution: executionResult.rows[0],
+  };
 }
 
 app.get('/api/health', async (_req, res) => {

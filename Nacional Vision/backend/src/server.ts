@@ -315,83 +315,31 @@ async function getMaioresQuedas(params: { referenceDate: string; top: number; ve
 async function getSemCompras(params: { referenceDate: string; top: number; vendedor?: string; supervisor?: string }) {
   const { referenceDate, top, vendedor = '', supervisor = '' } = params;
   const periods = await getComparisonPeriods(referenceDate);
+  const periodoReferencia = referenceDate.slice(0, 7).replace('-', '');
   const reportResult = await pool.query(`
-    WITH limites AS (
-      SELECT
-        $1::date AS current_start,
-        $2::date AS current_end,
-        $3::date AS previous_start,
-        $4::date AS previous_end,
-        date_trunc('month', $1::date - interval '3 month')::date AS avg_start,
-        (date_trunc('month', $1::date) - interval '1 day')::date AS avg_end
-    ),
-    pedidos AS (
-      SELECT
-        (raw_data->>'CODCLI')::bigint AS codcli,
-        MAX(raw_data->>'CLIENTE') AS cliente,
-        MAX(raw_data->>'NOMECIDADE') AS cidade,
-        MAX((raw_data->>'CODUSUR1')::bigint) AS codusur,
-        MAX(TRIM(raw_data->>'VENDEDOR')) AS vendedor,
-        (raw_data->>'DATA')::date AS data_pedido,
-        SUM(REPLACE(raw_data->>'TOTAL', ',', '.')::numeric) AS total_pedido
-      FROM staging."FATO_PEDIDO"
-      WHERE raw_data->>'POSICAO' = 'F' AND (raw_data->>'DATA') IS NOT NULL
-      GROUP BY 1,6
-    ),
-    clientes AS (
-      SELECT DISTINCT ON ((raw_data->>'COD_CLIENTE')::bigint)
-        (raw_data->>'COD_CLIENTE')::bigint AS cod_cliente,
-        raw_data->>'NOME_CLIENTE' AS nome_cliente,
-        raw_data->>'NOMECIDADE' AS nomecidade,
-        raw_data->>'STATUS_CLIENTE' AS status_cliente,
-        raw_data->>'TELEFONE_1' AS telefone_1,
-        raw_data->>'TELEFONE_2' AS telefone_2,
-        raw_data->>'TELEFONE_COMERCIAL' AS telefone_comercial,
-        TRIM(raw_data->>'SUPERVISOR') AS supervisor
-      FROM staging."DIM_CLIENTES"
-    ),
-    funcionarios AS (
-      SELECT DISTINCT ON ((raw_data->>'CODUSUR')::bigint)
-        (raw_data->>'CODUSUR')::bigint AS codusur,
-        TRIM(raw_data->>'NOME') AS nome_funcionario
-      FROM staging."DIM_FUNCIONARIOS"
-    ),
-    consolidado AS (
-      SELECT
-        p.codcli AS cod_cliente,
-        COALESCE(c.nome_cliente, p.cliente) AS cliente,
-        COALESCE(c.nomecidade, p.cidade) AS cidade,
-        COALESCE(f.nome_funcionario, p.vendedor) AS rca,
-        COALESCE(c.supervisor, '') AS supervisor,
-        COALESCE(NULLIF(c.telefone_1, ''), NULLIF(c.telefone_comercial, ''), NULLIF(c.telefone_2, '')) AS telefone,
-        SUM(CASE WHEN p.data_pedido BETWEEN l.current_start AND l.current_end THEN p.total_pedido ELSE 0 END) AS mes_atual,
-        SUM(CASE WHEN p.data_pedido BETWEEN l.previous_start AND l.previous_end THEN p.total_pedido ELSE 0 END) AS mes_passado,
-        ROUND(SUM(CASE WHEN p.data_pedido BETWEEN l.avg_start AND l.avg_end THEN p.total_pedido ELSE 0 END) / 3.0, 2) AS media_3_meses
-      FROM pedidos p
-      CROSS JOIN limites l
-      LEFT JOIN clientes c ON c.cod_cliente = p.codcli
-      LEFT JOIN funcionarios f ON f.codusur = p.codusur
-      WHERE COALESCE(c.status_cliente, 'ATIVO') = 'ATIVO'
-        AND ($5 = '' OR COALESCE(f.nome_funcionario, p.vendedor) = $5)
-        AND ($6 = '' OR COALESCE(c.supervisor, '') = $6)
-      GROUP BY 1,2,3,4,5,6
-    )
     SELECT
       cod_cliente,
-      cliente,
+      nome_cliente AS cliente,
       cidade,
-      rca,
+      vendedor AS rca,
       supervisor,
       telefone,
-      ROUND(mes_passado, 2) AS mes_passado,
-      ROUND(mes_atual, 2) AS mes_atual,
-      ROUND(media_3_meses, 2) AS media_3_meses,
-      ROUND(mes_passado, 2) AS potencial_recuperacao
-    FROM consolidado
-    WHERE mes_passado > 0 AND mes_atual = 0
-    ORDER BY mes_passado DESC, cliente ASC
-    LIMIT $7
-  `, [periods.current_start, periods.current_end, periods.previous_start, periods.previous_end, vendedor, supervisor, top]);
+      ROUND(fat_mes_1, 2) AS mes_passado,
+      ROUND(fat_mes_0, 2) AS mes_atual,
+      ROUND(media_3_ultimos_meses, 2) AS media_3_meses,
+      ROUND(fat_mes_1, 2) AS potencial_recuperacao,
+      fat_total_12_meses,
+      frequencia_a_ano,
+      frequencia_c_continua
+    FROM public.carteira_clientes_resumo
+    WHERE periodo_referencia = $1
+      AND ($2 = '' OR vendedor = $2)
+      AND ($3 = '' OR supervisor = $3)
+      AND fat_mes_1 > 0
+      AND comprou_mes_atual = FALSE
+    ORDER BY fat_mes_1 DESC, nome_cliente ASC
+    LIMIT $4
+  `, [periodoReferencia, vendedor, supervisor, top]);
   return { referenceDate, periods, filters: { vendedor, supervisor, top }, summary: { clientesSemCompra: reportResult.rows.length, basePerdida: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0), vendaMesAtual: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_atual), 0), vendaMesPassado: reportResult.rows.reduce((sum, row) => sum + toNumber(row.mes_passado), 0) }, items: reportResult.rows };
 }
 

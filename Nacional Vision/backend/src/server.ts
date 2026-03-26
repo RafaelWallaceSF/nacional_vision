@@ -206,25 +206,26 @@ function buildStyledPdfBuffer(report: any) {
 function buildSemComprasPdfBuffer(report: any) {
   const pageWidth = 595;
   const pageHeight = 842;
-  const margin = 26;
-  const tableTop = 670;
-  const rowHeight = 22;
-  const headerHeight = 24;
+  const margin = 24;
+  const tableTop = 642;
+  const rowHeight = 24;
+  const headerHeight = 26;
   const responsibleName = report.filters.vendedor || report.filters.supervisor || 'Todos';
+  const generatedAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
   const columns = [
     { key: 'idx', label: '#', width: 22, align: 'left' },
     { key: 'cod_cliente', label: 'CODIGO', width: 52, align: 'left' },
-    { key: 'cliente', label: 'NOME', width: 175, align: 'left' },
-    { key: 'cidade', label: 'CIDADE', width: 78, align: 'left' },
-    { key: 'telefone', label: 'CONTATO', width: 84, align: 'left' },
-    { key: 'mes_passado', label: 'VENDA MES ANTERIOR', width: 88, align: 'right' },
-    { key: 'media_3_meses', label: 'MEDIA 3 MESES', width: 70, align: 'right' },
+    { key: 'cliente', label: 'NOME', width: 178, align: 'left' },
+    { key: 'cidade', label: 'CIDADE', width: 74, align: 'left' },
+    { key: 'telefone', label: 'CONTATO', width: 78, align: 'left' },
+    { key: 'mes_passado', label: 'VENDA MES ANTERIOR', width: 92, align: 'right' },
+    { key: 'media_3_meses', label: 'MEDIA 3 MESES', width: 75, align: 'right' },
   ] as const;
 
   const rows = report.items.slice(0, report.filters.top || 20).map((item: any, index: number) => ({
     idx: String(index + 1),
     cod_cliente: sanitizePdfCell(item.cod_cliente, 10),
-    cliente: sanitizePdfCell(item.cliente, 38),
+    cliente: sanitizePdfCell(item.cliente, 40),
     cidade: sanitizePdfCell(item.cidade, 16),
     telefone: sanitizePdfCell(item.telefone, 16),
     mes_passado: formatCurrency(toNumber(item.mes_passado)),
@@ -232,41 +233,46 @@ function buildSemComprasPdfBuffer(report: any) {
   }));
 
   const ops: string[] = [];
-  ops.push(pdfRect(0, 0, pageWidth, pageHeight, [1, 1, 1]));
-  ops.push(pdfRect(margin, 770, pageWidth - margin * 2, 42, [0.125, 0.286, 0.639]));
-  ops.push(pdfText(margin + 12, 794, 'RELATORIO - CLIENTES SEM COMPRAS', 'F2', 16));
-  ops.push(pdfText(margin + 12, 778, `Data do relatorio: ${report.referenceDate}`, 'F1', 10));
+  ops.push(pdfRect(0, 0, pageWidth, pageHeight, [0.988, 0.992, 0.998]));
+  ops.push(pdfRect(margin, 754, pageWidth - margin * 2, 58, [0.067, 0.169, 0.404]));
+  ops.push(pdfText(margin + 14, 790, 'RELATORIO DE CLIENTES SEM COMPRAS', 'F2', 17, [1, 1, 1]));
+  ops.push(pdfText(margin + 14, 772, `Data do relatorio: ${report.referenceDate}`, 'F1', 10, [0.92, 0.96, 1]));
+  ops.push(pdfText(pageWidth - 150, 772, `Gerado em: ${generatedAt}`, 'F1', 9, [0.92, 0.96, 1]));
 
-  ops.push(pdfText(margin, 748, `Nome: ${sanitizePdfCell(responsibleName, 60)}`, 'F2', 11));
-  ops.push(pdfText(margin + 270, 748, `Clientes sem compra no mes: ${report.summary.clientesSemCompra}`, 'F2', 11));
-  ops.push(pdfText(margin, 730, `Base perdida: ${formatCurrency(report.summary.basePerdida)}`, 'F1', 10));
+  ops.push(pdfRect(margin, 710, 250, 30, [1, 1, 1], [0.84, 0.88, 0.95], 0.8));
+  ops.push(pdfRect(margin + 260, 710, 150, 30, [1, 1, 1], [0.84, 0.88, 0.95], 0.8));
+  ops.push(pdfRect(margin + 420, 710, 151, 30, [1, 1, 1], [0.84, 0.88, 0.95], 0.8));
+  ops.push(pdfText(margin + 10, 729, `Nome: ${sanitizePdfCell(responsibleName, 56)}`, 'F2', 10));
+  ops.push(pdfText(margin + 270, 729, `Qtd sem compra: ${report.summary.clientesSemCompra}`, 'F2', 10));
+  ops.push(pdfText(margin + 430, 729, `Base perdida: ${formatCurrency(report.summary.basePerdida)}`, 'F2', 10));
 
   ops.push(pdfRect(margin, tableTop, pageWidth - margin * 2, headerHeight, [0.125, 0.286, 0.639]));
   let currentX = margin;
   for (const column of columns) {
-    ops.push(pdfText(currentX + 4, tableTop + 7, column.label, 'F2', 7.5));
+    ops.push(pdfText(currentX + 4, tableTop + 8, column.label, 'F2', 7.4, [1, 1, 1]));
     currentX += column.width;
   }
 
   rows.forEach((row: any, rowIndex: number) => {
     const y = tableTop - ((rowIndex + 1) * rowHeight);
-    const fill: [number, number, number] = rowIndex % 2 === 0 ? [0.945, 0.961, 0.992] : [1, 1, 1];
-    ops.push(pdfRect(margin, y, pageWidth - margin * 2, rowHeight, fill, [0.82, 0.86, 0.93], 0.5));
+    const fill: [number, number, number] = rowIndex % 2 === 0 ? [1, 1, 1] : [0.96, 0.972, 0.992];
+    ops.push(pdfRect(margin, y, pageWidth - margin * 2, rowHeight, fill, [0.87, 0.9, 0.95], 0.45));
     let x = margin;
     columns.forEach((column) => {
       const raw = String((row as any)[column.key] ?? '-');
-      const text = sanitizePdfCell(raw, column.key === 'cliente' ? 38 : 18);
-      const approxCharWidth = 4.4;
+      const text = sanitizePdfCell(raw, column.key === 'cliente' ? 40 : 18);
+      const approxCharWidth = 4.35;
       const textWidth = Math.min(text.length * approxCharWidth, column.width - 8);
       const textX = column.align === 'right' ? x + column.width - textWidth - 4 : x + 4;
-      ops.push(pdfText(textX, y + 7, text, 'F1', 8));
+      ops.push(pdfText(textX, y + 8, text, 'F1', 8.1, [0.09, 0.12, 0.2]));
       x += column.width;
     });
   });
 
   const tableBottom = tableTop - (rows.length * rowHeight);
   ops.push(pdfRect(margin, tableBottom, pageWidth - margin * 2, headerHeight, [0.929, 0.945, 0.976], [0.82, 0.86, 0.93], 0.5));
-  ops.push(pdfText(margin + 6, tableBottom + 7, `Total exibido: ${rows.length} registro(s)`, 'F2', 9));
+  ops.push(pdfText(margin + 8, tableBottom + 8, `Total exibido: ${rows.length} registro(s)`, 'F2', 9));
+  ops.push(pdfText(pageWidth - 145, tableBottom + 8, 'Relatorio individual', 'F1', 9));
 
   const contentStream = ops.join('\n');
   const objects = [

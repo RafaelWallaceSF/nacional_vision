@@ -1,10 +1,18 @@
 # Nacional Vision
 
-## Dados iniciais
-- URL: http://74.1.21.111:5173/
-- Senha informada: salva em `.env.local`
+Pasta principal do projeto.
 
-## Próximos passos
-- localizar código-fonte do projeto
-- reunir acessos (usuário, banco, servidor, repositório)
-- mover arquivos relevantes para esta pasta
+## Estrutura
+- `frontend/` → app React/Vite
+- `backend/` → API Express/TypeScript
+- `arquitetura.md` → mapa técnico
+- `analise-completa.md` → análise geral
+- `webhook-batch.md` → contrato do webhook em lote
+- `.env.local` → dados locais registrados para organização
+
+## Observação
+Para evitar quebrar o ambiente atual, os caminhos antigos na raiz do workspace foram mantidos como atalhos simbólicos:
+- `/root/.openclaw/workspace/frontend` → `Nacional Vision/frontend`
+- `/root/.openclaw/workspace/backend` → `Nacional Vision/backend`
+
+Assim o projeto fica mais fácil de achar em `Nacional Vision/` sem parar o que já está rodando.

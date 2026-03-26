@@ -1,0 +1,123 @@
+import bcrypt from 'bcryptjs'
+import { pool } from './db'
+
+export async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.app_users (
+      id BIGSERIAL PRIMARY KEY,
+      name VARCHAR(150) NOT NULL,
+      email VARCHAR(190) NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role VARCHAR(50) NOT NULL DEFAULT 'user',
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_app_users_email
+    ON public.app_users (email)
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.report_groups (
+      id BIGSERIAL PRIMARY KEY,
+      name VARCHAR(160) NOT NULL UNIQUE,
+      group_type VARCHAR(40) NOT NULL,
+      delivery_mode VARCHAR(40) NOT NULL DEFAULT 'individual',
+      description TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.report_group_members (
+      id BIGSERIAL PRIMARY KEY,
+      group_id BIGINT NOT NULL REFERENCES public.report_groups(id) ON DELETE CASCADE,
+      member_type VARCHAR(40) NOT NULL,
+      member_key VARCHAR(190) NOT NULL,
+      member_label VARCHAR(190) NOT NULL,
+      channel VARCHAR(40),
+      destination VARCHAR(190),
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (group_id, member_type, member_key)
+    )
+  `)
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_report_group_members_group_id
+    ON public.report_group_members (group_id)
+  `)
+
+  await pool.query(`
+    UPDATE public.report_group_members
+    SET channel = 'webhook',
+        destination = CASE
+          WHEN COALESCE(destination, '') = '' OR destination = member_key OR destination = member_label THEN NULL
+          ELSE destination
+        END,
+        updated_at = NOW()
+    WHERE COALESCE(channel, '') <> 'webhook'
+       OR COALESCE(destination, '') = member_key
+       OR COALESCE(destination, '') = member_label
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.webhook_test_logs (
+      id BIGSERIAL PRIMARY KEY,
+      employee_name VARCHAR(190) NOT NULL,
+      alias_name VARCHAR(190) NOT NULL,
+      phone VARCHAR(40) NOT NULL,
+      webhook_url TEXT,
+      response_status INTEGER,
+      success BOOLEAN NOT NULL DEFAULT FALSE,
+      response_text TEXT,
+      error_message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_webhook_test_logs_created_at
+    ON public.webhook_test_logs (created_at DESC)
+  `)
+
+  await pool.query(`ALTER TABLE public.daily_report_rules DROP CONSTRAINT IF EXISTS chk_daily_report_rules_channel`)
+  await pool.query(`ALTER TABLE public.daily_report_rules ADD CONSTRAINT chk_daily_report_rules_channel CHECK (channel::text = ANY (ARRAY['whatsapp','email','telegram','system','webhook']::text[]))`)
+  await pool.query(`ALTER TABLE public.daily_report_rules DROP CONSTRAINT IF EXISTS chk_daily_report_rules_target_type`)
+  await pool.query(`ALTER TABLE public.daily_report_rules ADD CONSTRAINT chk_daily_report_rules_target_type CHECK (target_type::text = ANY (ARRAY['supervisor','gerente','vendedor','setor','grupo_contato','group','all_vendedores']::text[]))`)
+
+  await pool.query(`
+    INSERT INTO public.report_types (code, name, description, source_key, active)
+    VALUES
+      ('sem_compras', 'Sem compras', 'Clientes sem compra no recorte selecionado.', 'painel_rca.sem_compras', TRUE),
+      ('top_oportunidades', 'Top oportunidades', 'Ranking comercial priorizado para ação.', 'painel_rca.top_oportunidades', TRUE),
+      ('top_10_maiores', '10 maiores', 'Maiores clientes / contas do período.', 'painel_rca.top_10_maiores', TRUE)
+    ON CONFLICT (code) DO UPDATE
+    SET name = EXCLUDED.name,
+        description = EXCLUDED.description,
+        source_key = EXCLUDED.source_key,
+        active = EXCLUDED.active,
+        updated_at = NOW()
+  `)
+
+  const existing = await pool.query(
+    'SELECT id FROM public.app_users WHERE email = $1 LIMIT 1',
+    ['admin@teste.local'],
+  )
+
+  if (existing.rowCount === 0) {
+    const passwordHash = await bcrypt.hash('Admin@123', 10)
+
+    await pool.query(
+      `INSERT INTO public.app_users (name, email, password_hash, role, active)
+       VALUES ($1, $2, $3, $4, $5)`,
+      ['Admin Teste', 'admin@teste.local', passwordHash, 'admin', true],
+    )
+  }
+}
